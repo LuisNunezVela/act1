@@ -325,4 +325,15 @@
 
   // --- initial default state ---
   document.getElementById("btn-reset-default").click();
+
+  // --- debug hook (inspect from the browser console) ---
+  window.__debug = {
+    get originId() { return originId; },
+    get destId() { return destId; },
+    get currentPair() { return currentPair; },
+    get currentTrace() { return currentTrace; },
+    pathToLatLngs: pathToLatLngs,
+    pointsBetween: pointsBetween,
+    GRAPH_DATA: GRAPH_DATA,
+  };
 })();
