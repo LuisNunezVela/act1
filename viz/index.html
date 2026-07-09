@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RutaCruz — Búsqueda en el grafo de Santa Cruz</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="sidebar">
+<div id="panel">
+  <h1>RutaCruz</h1>
+  <p class="subtitle">Búsqueda en espacio de estados — reparto en Santa Cruz de la Sierra</p>
+
+  <div class="field-group">
+    <div class="field">
+      <label>Origen</label>
+      <div id="origin-label" class="node-chip">—</div>
+    </div>
+    <div class="field">
+      <label>Destino</label>
+      <div id="dest-label" class="node-chip">—</div>
+    </div>
+  </div>
+  <p class="hint">Click en 2 nodos del mapa para elegir origen y destino.</p>
+  <button id="btn-reset-default" class="btn-secondary">Usar ruta por defecto</button>
+  <button id="btn-clear-selection" class="btn-secondary">Limpiar selección</button>
+
+  <div class="field">
+    <label>Algoritmo a animar</label>
+    <select id="algo-select">
+      <option value="bfs">BFS (Búsqueda en Anchura)</option>
+      <option value="dfs">DFS (Búsqueda en Profundidad)</option>
+    </select>
+  </div>
+
+  <div class="controls-row">
+    <button id="btn-play" class="btn-primary">▶ Play</button>
+    <button id="btn-pause" class="btn-primary" disabled>⏸ Pausa</button>
+    <button id="btn-restart" class="btn-secondary">⟲ Reiniciar</button>
+  </div>
+
+  <div class="field">
+    <label>Velocidad: <span id="speed-value">300</span> ms/paso</label>
+    <input type="range" id="speed-slider" min="50" max="1000" step="50" value="300">
+  </div>
+
+  <div class="field">
+    <label>Progreso</label>
+    <div id="step-counter">Paso 0 / 0</div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><span class="dot dot-unvisited"></span> No visitado</div>
+    <div class="legend-item"><span class="dot dot-frontier"></span> En frontera</div>
+    <div class="legend-item"><span class="dot dot-visited"></span> Visitado</div>
+    <div class="legend-item"><span class="dot dot-current"></span> Nodo actual / inicio del camino</div>
+    <div class="legend-item"><span class="dot dot-goal"></span> Fin del camino</div>
+    <div class="legend-item"><span class="dot dot-path"></span> Camino (intermedio)</div>
+    <div class="legend-item"><span class="dot dot-role"></span> Depósito / Cliente</div>
+  </div>
+
+  <div id="metrics">
+    <h2>Comparación BFS vs DFS</h2>
+    <table>
+      <thead><tr><th></th><th>BFS</th><th>DFS</th></tr></thead>
+      <tbody>
+        <tr><td>Nodos explorados</td><td id="m-bfs-nodes">—</td><td id="m-dfs-nodes">—</td></tr>
+        <tr><td>Costo del camino</td><td id="m-bfs-cost">—</td><td id="m-dfs-cost">—</td></tr>
+        <tr><td>Tiempo de ejecución</td><td id="m-bfs-time">—</td><td id="m-dfs-time">—</td></tr>
+        <tr><td>Nodos en el camino</td><td id="m-bfs-pathlen">—</td><td id="m-dfs-pathlen">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div id="page-nav">
+  <a href="index.html" class="active">🗺 Demo</a>
+  <a href="editor.html">✏️ Editor</a>
+</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="graph_data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

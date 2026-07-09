@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RutaCruz — Editor de grafo</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="sidebar">
+<div id="panel">
+  <h1>Editor de grafo</h1>
+  <p class="subtitle">Coloca nodos reales sobre las avenidas de Santa Cruz y traza las calles que los conectan.</p>
+
+  <div class="mode-row">
+    <button class="mode-btn" data-mode="none">🖐 Mover mapa</button>
+    <button class="mode-btn" data-mode="point">📍 Punto</button>
+    <button class="mode-btn" data-mode="line">〰 Línea</button>
+    <button class="mode-btn" data-mode="delete">🗑 Borrar</button>
+  </div>
+
+  <div id="status-box">Modo mapa: desplázate y haz zoom sin agregar nada.</div>
+
+  <div class="counts">
+    <span id="node-count">0 nodos</span> · <span id="edge-count">0 calles</span>
+  </div>
+
+  <button id="btn-undo" class="btn-secondary">↩ Deshacer último</button>
+  <button id="btn-clear-all" class="btn-secondary">🗑 Limpiar todo</button>
+
+  <hr>
+
+  <button id="btn-save" class="btn-primary" style="width:100%; margin-bottom:8px;">💾 Guardar archivo (manual_graph.json)</button>
+  <button id="btn-load" class="btn-secondary">📂 Cargar archivo</button>
+  <input type="file" id="file-input" accept="application/json" style="display:none;">
+
+  <p class="hint">
+    El trabajo se guarda automáticamente en este navegador mientras editas.
+    Usa <strong>Guardar archivo</strong> para exportar <code>manual_graph.json</code> y
+    colócalo en la carpeta <code>data/</code> del proyecto cuando quieras usarlo en el notebook de Python.
+  </p>
+
+  <div id="node-list-wrap">
+    <label>Nodos creados</label>
+    <div id="node-list"></div>
+  </div>
+</div>
+
+<div id="page-nav">
+  <a href="index.html">🗺 Demo</a>
+  <a href="editor.html" class="active">✏️ Editor</a>
+</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="editor.js"></script>
+</body>
+</html>
