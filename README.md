@@ -8,19 +8,10 @@ En esta página se crean los nodos (intersecciones o puntos de referencia) y las
 
 Modos disponibles (botones en la parte superior del panel):
 
-┌─────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│    Modo     │                                                                                                                    Función                                                                                                                     │
-├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ 🖐 Mover     │ Permite navegar el mapa (zoom y desplazamiento) sin agregar elementos.                                                                                                                                                                         │
-│ mapa        │                                                                                                                                                                                                                                                │
-├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ 📍 Punto    │ Cada clic sobre el mapa crea un nuevo nodo. Se solicita un nombre (por ejemplo, "Radial 10 x 2do Anillo"); si se cancela, el nodo no se crea.                                                                                                  │
-├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ 〰 Línea    │ Traza una calle entre dos nodos. Se hace clic en un nodo de origen; cada clic siguiente sobre el mapa agrega un punto intermedio (para seguir la curva real de la calle); un clic sobre otro nodo finaliza el trazo. Un clic nuevamente sobre  │
-│             │ el nodo de origen cancela el trazo.                                                                                                                                                                                                            │
-├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ 🗑 Borrar    │ Un clic sobre un nodo o una calle la elimina. Si el nodo tiene calles conectadas, se solicita confirmación para eliminar todo en conjunto.                                                                                                     │
-└─────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+🖐 Mover Permite navegar el mapa (zoom y desplazamiento) sin agregar elementos.
+📍 Punto  Cada clic sobre el mapa crea un nuevo nodo. Se solicita un nombre (por ejemplo, "Radial 10 x 2do Anillo"); si se cancela, el nodo no se crea.
+〰 Línea  Traza una calle entre dos nodos. Se hace clic en un nodo de origen; cada clic siguiente sobre el mapa agrega un punto intermedio (para seguir la curva real de la calle); un clic sobre otro nodo finaliza el trazo. Un clic nuevamente sobre el nodo de origen cancela el trazo.
+🗑 Borrar  Un clic sobre un nodo o una calle la elimina. Si el nodo tiene calles conectadas, se solicita confirmación para eliminar todo en conjunto
 
 Otros controles:
 - ↩ Deshacer último: revierte la última acción realizada (creación de nodo o calle).
