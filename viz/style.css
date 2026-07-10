@@ -264,6 +264,19 @@ select {
 
 .leaflet-popup-content { font-size: 12px; }
 
+.edge-label {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--navy);
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(20, 25, 50, 0.15);
+  pointer-events: none;
+}
+
 @media (max-width: 640px) {
   #sidebar {
     width: calc(100vw - 32px);

@@ -18,10 +18,17 @@
   var draftPolyline = null;
 
   var map = L.map("map").setView(SANTA_CRUZ_CENTER, 13);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  var tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);
+
+  var mapOpacitySlider = document.getElementById("map-opacity-slider");
+  var mapOpacityValue = document.getElementById("map-opacity-value");
+  mapOpacitySlider.addEventListener("input", function () {
+    mapOpacityValue.textContent = mapOpacitySlider.value;
+    tileLayer.setOpacity(parseInt(mapOpacitySlider.value, 10) / 100);
+  });
 
   var statusBox = document.getElementById("status-box");
   var nodeCountEl = document.getElementById("node-count");

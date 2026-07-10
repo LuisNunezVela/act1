@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RutaCruz — Búsqueda en el grafo de Santa Cruz</title>
+<title>EasyRoute — Búsqueda en el grafo de Santa Cruz</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
   integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <link rel="stylesheet" href="style.css" />
@@ -14,7 +14,7 @@
 
 <div id="sidebar">
 <div id="panel">
-  <h1>RutaCruz</h1>
+  <h1>EasyRoute</h1>
   <p class="subtitle">Búsqueda en espacio de estados — reparto en Santa Cruz de la Sierra</p>
 
   <div class="field-group">
@@ -28,6 +28,12 @@
     </div>
   </div>
   <p class="hint">Click en 2 nodos del mapa para elegir origen y destino.</p>
+
+  <div class="field">
+    <label>Opacidad del mapa: <span id="map-opacity-value">100</span>%</label>
+    <input type="range" id="map-opacity-slider" min="10" max="100" step="5" value="100">
+  </div>
+
   <button id="btn-reset-default" class="btn-secondary">Usar ruta por defecto</button>
   <button id="btn-clear-selection" class="btn-secondary">Limpiar selección</button>
 

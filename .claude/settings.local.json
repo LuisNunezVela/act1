@@ -8,7 +8,8 @@
       "Bash(export PYTHONIOENCODING=utf-8)",
       "Skill(run)",
       "Bash(mkdir -p \"/c/Users/luisf/AppData/Local/Temp/claude/D--development-ia-act1/bfb9ede7-2251-494c-a081-f9425e640c22/scratchpad/act1-scratch\")",
-      "Bash(cp -r \"/d/development/ia/act1/scratch/.\" \"/c/Users/luisf/AppData/Local/Temp/claude/D--development-ia-act1/bfb9ede7-2251-494c-a081-f9425e640c22/scratchpad/act1-scratch/\")"
+      "Bash(cp -r \"/d/development/ia/act1/scratch/.\" \"/c/Users/luisf/AppData/Local/Temp/claude/D--development-ia-act1/bfb9ede7-2251-494c-a081-f9425e640c22/scratchpad/act1-scratch/\")",
+      "Bash(python *)"
     ]
   }
 }

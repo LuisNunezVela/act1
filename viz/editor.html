@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RutaCruz — Editor de grafo</title>
+<title>EasyRoute — Editor de grafo</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
   integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <link rel="stylesheet" href="style.css" />
@@ -25,6 +25,12 @@
   </div>
 
   <div id="status-box">Modo mapa: desplázate y haz zoom sin agregar nada.</div>
+
+  <div class="field">
+    <label>Opacidad del mapa: <span id="map-opacity-value">100</span>%</label>
+    <input type="range" id="map-opacity-slider" min="10" max="100" step="5" value="100">
+  </div>
+
 
   <div class="counts">
     <span id="node-count">0 nodos</span> · <span id="edge-count">0 calles</span>

@@ -3,7 +3,7 @@
 
   if (typeof GRAPH_DATA === "undefined" || !GRAPH_DATA.nodes || GRAPH_DATA.nodes.length === 0) {
     document.getElementById("panel").innerHTML =
-      '<h1>RutaCruz</h1><p class="subtitle">Todavía no hay un grafo generado.</p>' +
+      '<h1>EasyRoute</h1><p class="subtitle">Todavía no hay un grafo generado.</p>' +
       '<p class="hint">1. Abre <code>editor.html</code> y traza los nodos/calles reales.<br>' +
       "2. Guarda <code>manual_graph.json</code> en la carpeta <code>data/</code>.<br>" +
       "3. Corre el notebook <code>reparto_santa_cruz.ipynb</code> para generar los datos.<br>" +
@@ -55,22 +55,70 @@
     return latlngs;
   }
 
+  function haversineMeters(a, b) {
+    var R = 6371000;
+    var lat1 = (a[0] * Math.PI) / 180, lat2 = (b[0] * Math.PI) / 180;
+    var dLat = ((b[0] - a[0]) * Math.PI) / 180;
+    var dLon = ((b[1] - a[1]) * Math.PI) / 180;
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  // finds the point at half the traced walking distance, not just the average
+  // of endpoints, so the label sits on the line even when the street curves
+  function polylineMidpoint(pts) {
+    var segLens = [], total = 0;
+    for (var i = 0; i < pts.length - 1; i++) {
+      var d = haversineMeters(pts[i], pts[i + 1]);
+      segLens.push(d);
+      total += d;
+    }
+    var half = total / 2, acc = 0;
+    for (var i = 0; i < segLens.length; i++) {
+      if (acc + segLens[i] >= half) {
+        var t = segLens[i] === 0 ? 0 : (half - acc) / segLens[i];
+        var a = pts[i], b = pts[i + 1];
+        return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      }
+      acc += segLens[i];
+    }
+    return pts[Math.floor(pts.length / 2)];
+  }
+
   var map = L.map("map", { zoomControl: true }).setView(
     [GRAPH_DATA.center.lat, GRAPH_DATA.center.lon], 13
   );
 
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  var tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);
 
+  var mapOpacitySlider = document.getElementById("map-opacity-slider");
+  var mapOpacityValue = document.getElementById("map-opacity-value");
+  mapOpacitySlider.addEventListener("input", function () {
+    mapOpacityValue.textContent = mapOpacitySlider.value;
+    tileLayer.setOpacity(parseInt(mapOpacitySlider.value, 10) / 100);
+  });
+
   var edgeLayer = L.layerGroup().addTo(map);
+  var edgeLabelLayer = L.layerGroup().addTo(map);
   GRAPH_DATA.edges.forEach(function (e) {
-    L.polyline(pointsBetween(e.source, e.target), {
+    var pts = pointsBetween(e.source, e.target);
+    L.polyline(pts, {
       color: "#9aa3b5",
       weight: 2,
       opacity: 0.55,
     }).addTo(edgeLayer);
+
+    var mid = polylineMidpoint(pts);
+    var km = (e.weight / 1000).toFixed(2) + " km";
+    L.marker(mid, {
+      icon: L.divIcon({ className: "edge-label", html: km, iconSize: null }),
+      interactive: false,
+      keyboard: false,
+    }).addTo(edgeLabelLayer);
   });
 
   var pathLayer = L.layerGroup().addTo(map);
