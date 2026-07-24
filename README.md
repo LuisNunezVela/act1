@@ -62,3 +62,26 @@ cd notebook
 2. Guardar el archivo y reemplazarlo en data/manual_graph.json.
 3. Ejecutar el notebook para regenerar data/graph_export.json y viz/graph_data.js.
 4. Abrir index.html, seleccionar origen y destino (o usar la ruta por defecto), elegir el algoritmo y presionar Play para observar la animación y comparar las métricas.
+
+## 5. Preguntar en lenguaje natural (backend LangChain)
+
+El campo "❓ Preguntar en lenguaje natural" de index.html permite escribir algo como *"quiero la ruta más rápida del nodo 34 al nodo 45"*. Un backend con LangChain (usando Google Gemini como modelo, capa gratuita) interpreta la pregunta, identifica los nodos de origen/destino y se los pasa a index.html, que dispara la comparación BFS vs DFS normal sobre ese par.
+
+**Obtener una API key gratuita de Google:**
+1. Ve a [aistudio.google.com](https://aistudio.google.com), inicia sesión con una cuenta de Google.
+2. Clic en "Get API key" → "Create API key". No pide tarjeta de crédito.
+3. Copia la key (empieza con `AIza...`).
+
+**Levantar el backend:**
+
+```
+cd backend
+python -m venv .venv
+.venv\Scripts\activate        (Windows)  |  source .venv/bin/activate  (Linux/Mac)
+pip install -r requirements.txt
+copy .env.example .env        (Windows)  |  cp .env.example .env      (Linux/Mac)
+# editar .env y poner tu GOOGLE_API_KEY real
+python app.py
+```
+
+Con el backend corriendo en `http://127.0.0.1:5000`, abre index.html normalmente y usa el campo de pregunta. Si el backend no está corriendo, el campo muestra un mensaje de error en vez de fallar en silencio.

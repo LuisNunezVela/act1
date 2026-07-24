@@ -9,7 +9,31 @@
       "Skill(run)",
       "Bash(mkdir -p \"/c/Users/luisf/AppData/Local/Temp/claude/D--development-ia-act1/bfb9ede7-2251-494c-a081-f9425e640c22/scratchpad/act1-scratch\")",
       "Bash(cp -r \"/d/development/ia/act1/scratch/.\" \"/c/Users/luisf/AppData/Local/Temp/claude/D--development-ia-act1/bfb9ede7-2251-494c-a081-f9425e640c22/scratchpad/act1-scratch/\")",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Skill(claude-api)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 *)",
+      "Bash(node -c viz/app.js)",
+      "Bash(node --check viz/app.js)",
+      "Bash(git check-ignore *)",
+      "Bash(/home/luisf/development/uni/act1/.venv/bin/pip install *)",
+      "Bash(/home/luisf/development/uni/act1/.venv/bin/python3 --version)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(/home/luisf/development/uni/act1/.venv/bin/python3 -m pip install -q -r /home/luisf/development/uni/act1/backend/requirements.txt)",
+      "Bash(/home/luisf/development/uni/act1/.venv/bin/python3 app.py)",
+      "Read(//tmp/**)",
+      "Bash(curl -s -X POST http://127.0.0.1:5000/preguntar -H 'Content-Type: application/json' -d '{\"query\": \"quiero la ruta mas rapida del nodo 34 al nodo 45\"}')",
+      "Bash(pkill -f \"backend/app.py\")",
+      "Bash(/home/luisf/development/uni/act1/.venv/bin/python3 -m pip install -r /home/luisf/development/uni/act1/backend/requirements.txt)",
+      "Bash(pkill -f \"app.py\")",
+      "Bash(fuser -k 5000/tcp)",
+      "Bash(pkill -9 -f \"backend/app.py\")",
+      "Bash(pkill -9 -f \"python3 app.py\")",
+      "Bash(nohup /home/luisf/development/uni/act1/.venv/bin/python3 app.py)",
+      "Bash(disown)",
+      "Bash(node --check /home/luisf/development/uni/act1/viz/app.js)",
+      "Bash(/home/luisf/development/uni/act1/.venv/bin/python3 -m py_compile /home/luisf/development/uni/act1/backend/app.py)",
+      "Bash(curl -s -X POST http://127.0.0.1:5000/responder -H 'Content-Type: application/json' -d @/tmp/responder_payload.json)"
     ]
   }
 }

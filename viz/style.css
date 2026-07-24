@@ -180,16 +180,40 @@ button:disabled {
   margin-bottom: 14px;
 }
 
-select, input[type="range"] {
+select, input[type="range"], input[type="text"] {
   width: 100%;
 }
 
-select {
+select, input[type="text"] {
   padding: 7px 8px;
   border-radius: 8px;
   border: 1px solid var(--border);
   font-size: 13px;
   background: white;
+}
+
+input[type="text"] {
+  margin-bottom: 6px;
+  font-family: inherit;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.ask-error {
+  color: var(--current);
+}
+
+.ask-answer {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--gray-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 0 0 10px;
 }
 
 #step-counter {

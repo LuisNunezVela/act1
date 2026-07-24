@@ -197,6 +197,90 @@
     loadPair(originId, destId);
   });
 
+  // --- pregunta en lenguaje natural (backend LangChain) ---
+  var ASK_ENDPOINT = "http://127.0.0.1:5000/preguntar";
+  var EXPLAIN_ENDPOINT = "http://127.0.0.1:5000/responder";
+  var askInput = document.getElementById("ask-input");
+  var askStatus = document.getElementById("ask-status");
+  var btnAsk = document.getElementById("btn-ask");
+
+  function fetchJson(url, payload) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(function (res) {
+      return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+    });
+  }
+
+  function setAskStatus(text, kind) {
+    askStatus.textContent = text;
+    askStatus.className = kind === "answer" ? "ask-answer" : kind === "error" ? "hint ask-error" : "hint";
+  }
+
+  function askRoute() {
+    var query = askInput.value.trim();
+    if (!query) return;
+
+    btnAsk.disabled = true;
+    setAskStatus("Buscando…", "status");
+
+    fetchJson(ASK_ENDPOINT, { query: query })
+      .then(function (result) {
+        if (!result.ok) {
+          setAskStatus(result.data.error || "No se pudo interpretar la pregunta.", "error");
+          return null;
+        }
+
+        originId = result.data.origen_id;
+        destId = result.data.destino_id;
+        originLabel.textContent = nodesById[originId].name;
+        destLabel.textContent = nodesById[destId].name;
+
+        loadPair(originId, destId);      // selecciona el par y calcula métricas BFS/DFS
+        btnPlay.click();                 // dispara la animación con ambos nodos ya seleccionados
+
+        setAskStatus("Pensando una respuesta…", "status");
+        return fetchJson(EXPLAIN_ENDPOINT, {
+          query: query,
+          origen_nombre: result.data.origen_nombre,
+          destino_nombre: result.data.destino_nombre,
+          bfs: {
+            nodes_explored: currentPair.bfs.nodes_explored,
+            cost: currentPair.bfs.cost,
+            time_s: currentPair.bfs.time_s,
+            path_length: currentPair.bfs.path.length,
+          },
+          dfs: {
+            nodes_explored: currentPair.dfs.nodes_explored,
+            cost: currentPair.dfs.cost,
+            time_s: currentPair.dfs.time_s,
+            path_length: currentPair.dfs.path.length,
+          },
+        });
+      })
+      .then(function (explainResult) {
+        if (!explainResult) return; // ya se mostró un error arriba
+        if (!explainResult.ok) {
+          setAskStatus(explainResult.data.error || "No se pudo generar la respuesta.", "error");
+          return;
+        }
+        setAskStatus(explainResult.data.respuesta, "answer");
+      })
+      .catch(function () {
+        setAskStatus("No se pudo conectar con el backend (¿está corriendo en :5000?).", "error");
+      })
+      .finally(function () {
+        btnAsk.disabled = false;
+      });
+  }
+
+  btnAsk.addEventListener("click", askRoute);
+  askInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") askRoute();
+  });
+
   // --- metrics panel ---
   function fmtMeters(m) {
     return m >= 1000 ? (m / 1000).toFixed(2) + " km" : Math.round(m) + " m";
@@ -371,8 +455,8 @@
     btnPause.disabled = true;
   });
 
-  // --- initial default state ---
-  document.getElementById("btn-reset-default").click();
+  // --- initial state: nothing selected until the user clicks nodes,
+  // usa "Usar ruta por defecto", o pregunta en lenguaje natural ---
 
   // --- debug hook (inspect from the browser console) ---
   window.__debug = {
