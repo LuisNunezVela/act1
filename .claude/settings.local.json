@@ -33,7 +33,18 @@
       "Bash(disown)",
       "Bash(node --check /home/luisf/development/uni/act1/viz/app.js)",
       "Bash(/home/luisf/development/uni/act1/.venv/bin/python3 -m py_compile /home/luisf/development/uni/act1/backend/app.py)",
-      "Bash(curl -s -X POST http://127.0.0.1:5000/responder -H 'Content-Type: application/json' -d @/tmp/responder_payload.json)"
+      "Bash(curl -s -X POST http://127.0.0.1:5000/responder -H 'Content-Type: application/json' -d @/tmp/responder_payload.json)",
+      "Bash(node --check app.js)",
+      "Bash(curl -s http://127.0.0.1:8791/index.html)",
+      "Bash(pkill -f \"http.server 8791\")",
+      "Bash(/home/luisf/development/uni/act1/.venv/bin/python -c \"import flask, flask_cors, langchain, langchain_google_genai, pydantic, dotenv; print\\('deps ok'\\)\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:5000/preguntar -X POST -H \"Content-Type: application/json\" -d '{\"query\":\"test\"}')",
+      "Bash(curl -s -o /dev/null -w \"backend:%{http_code}\\\\n\" http://127.0.0.1:5000/preguntar -X POST -H \"Content-Type: application/json\" -d '{\"query\":\"test\"}')",
+      "Bash(curl -s -o /dev/null -w \"frontend:%{http_code}\\\\n\" http://127.0.0.1:8791/index.html)",
+      "Bash(git mv *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8791/index.html)",
+      "Bash(curl *)",
+      "Bash(pdfinfo /home/luisf/development/uni/act1/Guia_Actividad4.pdf)"
     ]
   }
 }

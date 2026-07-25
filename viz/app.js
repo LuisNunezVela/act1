@@ -201,8 +201,23 @@
   var ASK_ENDPOINT = "http://127.0.0.1:5000/preguntar";
   var EXPLAIN_ENDPOINT = "http://127.0.0.1:5000/responder";
   var askInput = document.getElementById("ask-input");
-  var askStatus = document.getElementById("ask-status");
   var btnAsk = document.getElementById("btn-ask");
+  var chatMessages = document.getElementById("chat-messages");
+  var chatWidget = document.getElementById("chat-widget");
+  var chatToggleBtn = document.getElementById("chat-toggle-btn");
+  var chatMinimizeBtn = document.getElementById("chat-minimize-btn");
+
+  function openChat() {
+    chatWidget.classList.add("open");
+    askInput.focus();
+  }
+  function closeChat() {
+    chatWidget.classList.remove("open");
+  }
+  chatToggleBtn.addEventListener("click", function () {
+    chatWidget.classList.contains("open") ? closeChat() : openChat();
+  });
+  chatMinimizeBtn.addEventListener("click", closeChat);
 
   function fetchJson(url, payload) {
     return fetch(url, {
@@ -214,22 +229,34 @@
     });
   }
 
-  function setAskStatus(text, kind) {
-    askStatus.textContent = text;
-    askStatus.className = kind === "answer" ? "ask-answer" : kind === "error" ? "hint ask-error" : "hint";
+  function addMessage(text, extraClass) {
+    var div = document.createElement("div");
+    div.className = "chat-msg " + extraClass;
+    div.textContent = text;
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return div;
+  }
+
+  function setBotMessage(el, text, kind) {
+    el.textContent = text;
+    el.className = "chat-msg chat-msg-bot" + (kind === "error" ? " chat-msg-error" : kind === "status" ? " chat-msg-status" : "");
+    chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
   function askRoute() {
     var query = askInput.value.trim();
     if (!query) return;
 
+    addMessage(query, "chat-msg-user");
+    askInput.value = "";
     btnAsk.disabled = true;
-    setAskStatus("Buscando…", "status");
+    var botMsg = addMessage("Buscando…", "chat-msg-bot chat-msg-status");
 
     fetchJson(ASK_ENDPOINT, { query: query })
       .then(function (result) {
         if (!result.ok) {
-          setAskStatus(result.data.error || "No se pudo interpretar la pregunta.", "error");
+          setBotMessage(botMsg, result.data.error || "No se pudo interpretar la pregunta.", "error");
           return null;
         }
 
@@ -241,7 +268,7 @@
         loadPair(originId, destId);      // selecciona el par y calcula métricas BFS/DFS
         btnPlay.click();                 // dispara la animación con ambos nodos ya seleccionados
 
-        setAskStatus("Pensando una respuesta…", "status");
+        setBotMessage(botMsg, "Pensando una respuesta…", "status");
         return fetchJson(EXPLAIN_ENDPOINT, {
           query: query,
           origen_nombre: result.data.origen_nombre,
@@ -263,13 +290,13 @@
       .then(function (explainResult) {
         if (!explainResult) return; // ya se mostró un error arriba
         if (!explainResult.ok) {
-          setAskStatus(explainResult.data.error || "No se pudo generar la respuesta.", "error");
+          setBotMessage(botMsg, explainResult.data.error || "No se pudo generar la respuesta.", "error");
           return;
         }
-        setAskStatus(explainResult.data.respuesta, "answer");
+        setBotMessage(botMsg, explainResult.data.respuesta, "answer");
       })
       .catch(function () {
-        setAskStatus("No se pudo conectar con el backend (¿está corriendo en :5000?).", "error");
+        setBotMessage(botMsg, "No se pudo conectar con el backend (¿está corriendo en :5000?).", "error");
       })
       .finally(function () {
         btnAsk.disabled = false;

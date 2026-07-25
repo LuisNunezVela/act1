@@ -1,6 +1,6 @@
 # Manual de uso — EasyRoute
 
-Aplicación de dos páginas para modelar el problema de reparto en Santa Cruz como grafo y comparar los algoritmos BFS y DFS. Se navega entre ellas con los botones 🗺 Demo / ✏️ Editor ubicados debajo del panel izquierdo.
+Aplicación para modelar el problema de reparto en Santa Cruz como grafo y comparar los algoritmos BFS y DFS. Al abrir index.html aparece un menú principal con dos opciones: 🔎 Buscar ruta (demo.html) y ✏️ Editar mapa (editor.html). Desde cualquiera de esas dos páginas se puede volver al menú o cambiar de página con los botones 🏠 Menú / 🔎 Buscar ruta / ✏️ Editor ubicados debajo del panel izquierdo.
 
 ## 1. editor.html — Construcción del grafo
 
@@ -36,9 +36,9 @@ La página de demostración no lee el editor en tiempo real; utiliza archivos ge
 3. Ejecutar el notebook para regenerar los datos:
 cd notebook
 ..\.venv\Scripts\jupyter nbconvert --to notebook --execute --inplace reparto_santa_cruz.ipynb
-4. Recién entonces index.html mostrará el grafo actualizado.
+4. Recién entonces demo.html mostrará el grafo actualizado.
 
-## 3. index.html — Demostración y animación de BFS vs DFS
+## 3. demo.html — Demostración y animación de BFS vs DFS
 
 - Origen y destino: se seleccionan haciendo clic en dos nodos del mapa (el primer clic define el origen, el segundo el destino). El botón Usar ruta por defecto carga automáticamente el par Depósito → Cliente Ejemplo. El botón Limpiar selección reinicia la selección.
 - Algoritmo a animar: se elige entre BFS o DFS mediante el selector correspondiente.
@@ -61,11 +61,11 @@ cd notebook
 1. Abrir editor.html y trazar los nodos y calles sobre el mapa real.
 2. Guardar el archivo y reemplazarlo en data/manual_graph.json.
 3. Ejecutar el notebook para regenerar data/graph_export.json y viz/graph_data.js.
-4. Abrir index.html, seleccionar origen y destino (o usar la ruta por defecto), elegir el algoritmo y presionar Play para observar la animación y comparar las métricas.
+4. Abrir demo.html, seleccionar origen y destino (o usar la ruta por defecto), elegir el algoritmo y presionar Play para observar la animación y comparar las métricas.
 
 ## 5. Preguntar en lenguaje natural (backend LangChain)
 
-El campo "❓ Preguntar en lenguaje natural" de index.html permite escribir algo como *"quiero la ruta más rápida del nodo 34 al nodo 45"*. Un backend con LangChain (usando Google Gemini como modelo, capa gratuita) interpreta la pregunta, identifica los nodos de origen/destino y se los pasa a index.html, que dispara la comparación BFS vs DFS normal sobre ese par.
+El botón flotante 🤖 de demo.html abre un chat donde se puede escribir algo como *"quiero la ruta más rápida del nodo 34 al nodo 45"*. Un backend con LangChain (usando Google Gemini como modelo, capa gratuita) interpreta la pregunta, identifica los nodos de origen/destino y se los pasa a demo.html, que dispara la comparación BFS vs DFS normal sobre ese par.
 
 **Obtener una API key gratuita de Google:**
 1. Ve a [aistudio.google.com](https://aistudio.google.com), inicia sesión con una cuenta de Google.
@@ -84,4 +84,4 @@ copy .env.example .env        (Windows)  |  cp .env.example .env      (Linux/Mac
 python app.py
 ```
 
-Con el backend corriendo en `http://127.0.0.1:5000`, abre index.html normalmente y usa el campo de pregunta. Si el backend no está corriendo, el campo muestra un mensaje de error en vez de fallar en silencio.
+Con el backend corriendo en `http://127.0.0.1:5000`, abre demo.html normalmente y usa el chat. Si el backend no está corriendo, el chat muestra un mensaje de error en vez de fallar en silencio.

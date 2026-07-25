@@ -1,0 +1,19 @@
+es dificil marcar rutas que no se pueden usar en el mapa, estaria bueno que con solo dar cick en el nodo, se bloquee la calle y automaticamente
+calcule otra ruta rodeando la que marco el tipo, y que haya en la parte de abajo de la pantalla un btoon donde pueda dar retroceder asi deshacer los puntos ue marco.
+
+❯ esta todo bien pero solo metricas, quisiera saber como podria hacer esta aplicacion un poco mas util, ya que todo mundo usa mapa para saber de desto, y si lo hago una aplicacion interactiva? es que la unica excusa de hacer esto de bsf y dsf es comparar 2 algoritmos, pero ahora me van a hacer exponer en una feria de apps, y quisiera mostrar mas utilidad, tienes alguna idea? veamos que dices y si no esta tan bueno ya yo puedo dar una idea despues de leer tu respuesta
+
+Tiene sentido el cambio de enfoque: para una feria de apps, "comparamos BFS vs DFS" no vende — la gente quiere ver algo que resuelva un problema real de reparto, no un algoritmo. Aquí van ideas ordenadas de mayor a menor impacto para ese contexto:
+
+Mi recomendación top: ruta de reparto con múltiples paradas (multi-stop).
+Hoy la app resuelve "de A a B". Pero ningún repartidor hace un solo viaje punto a punto — hace una ronda con 4-6 clientes. Si dejas elegir un depósito + varios clientes y la app calcula el mejor orden de visita (aunque sea con una heurística simple tipo "vecino más cercano", no necesita ser óptimo), pasas de "demo de algoritmo" a "planificador de ruta de reparto real". Es el cambio de framing más fuerte que puedes hacer sin reescribir la base: sigues usando tu grafo y tu BFS/DFS para las distancias entre paradas, solo cambia qué preguntas le haces.
+Tradeoff: es la idea con más código nuevo (lógica de ordenamiento + animación multi-tramo), pero es la que más "vende" en una feria.
+
+Otras ideas, de más a menos esfuerzo:
+
+- Geolocalización real del usuario como punto de partil navegador, snapeando al nodo más cercano del grafo).Poco código, pero un "wow" inmediato: la gente ve su propia ubicación en el mapa, no un nodo abstracto.
+- Direcciones por nombre real en el chat, no "Nodo 34"lles/lugares en el grafo — que el chat entienda "de laPlaza 24 de Septiembre al mercado Los Pozos" es mucho más creíble como app real que pedir números de nodo.
+- Hoja de ruta exportable (paso a paso en texto, usand guardan): "1. Sal por Av. X, 2. Gira en...". Convierte el resultado en algo que un repartidor real se llevaría impreso o al celular.
+- Costo por hora del día: multiplicar el costo de ciern horas pico, y que el usuario elija "salgo ahora" vs"salgo a las 7am". Esto justifica de forma honesta por qué buscar el camino correcto importa, más allá de comparar algoritmos académicos.
+
+Todas menos la primera son casi "complementos" livianos sobre lo que ya existe. Dime qué te parece o tira tu idea y la afinamos juntos.

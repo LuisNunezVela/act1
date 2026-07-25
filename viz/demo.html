@@ -38,13 +38,6 @@
   <button id="btn-clear-selection" class="btn-secondary">Limpiar selección</button>
 
   <div class="field">
-    <label>❓ Preguntar en lenguaje natural</label>
-    <input type="text" id="ask-input" placeholder="Haz tu pregunta aqui">
-    <button id="btn-ask" class="btn-primary btn-block">Preguntar</button>
-    <p id="ask-status" class="hint"></p>
-  </div>
-
-  <div class="field">
     <label>Algoritmo a animar</label>
     <select id="algo-select">
       <option value="bfs">BFS (Búsqueda en Anchura)</option>
@@ -93,9 +86,24 @@
 </div>
 
 <div id="page-nav">
-  <a href="index.html" class="active">🗺 Demo</a>
+  <a href="index.html">🏠 Menú</a>
+  <a href="demo.html" class="active">🔎 Buscar ruta</a>
   <a href="editor.html">✏️ Editor</a>
 </div>
+</div>
+
+<button id="chat-toggle-btn" title="Preguntar en lenguaje natural" aria-label="Abrir chat">🤖</button>
+
+<div id="chat-widget">
+  <div id="chat-header">
+    <span>Haz tu pregunta</span>
+    <button id="chat-minimize-btn" title="Minimizar" aria-label="Minimizar chat">—</button>
+  </div>
+  <div id="chat-messages"></div>
+  <div id="chat-footer">
+    <input type="text" id="ask-input" placeholder="Haz tu pregunta aquí">
+    <button id="btn-ask" class="btn-primary">➤</button>
+  </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
