@@ -817,3 +817,114 @@ code {
 @media (max-width: 640px) {
   #event-log-panel { width: calc(100vw - 32px); }
 }
+
+/* --- panel de detalle del chofer (click en el camión 🚚) --- */
+#driver-detail-panel {
+  position: fixed;
+  top: 16px;
+  right: 372px; /* a la izquierda de la columna del drawer de choferes, para no superponerse */
+  z-index: 1080;
+  width: 300px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(20, 25, 50, 0.28);
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#driver-detail-panel.open { display: flex; }
+
+#driver-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--navy);
+  color: white;
+}
+
+#driver-detail-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background-color: rgba(255, 255, 255, 0.15);
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+#driver-detail-name-wrap { flex: 1; overflow: hidden; }
+#driver-detail-name { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#driver-detail-status { font-size: 12px; color: rgba(255, 255, 255, 0.75); }
+
+#driver-detail-close {
+  background: transparent;
+  color: white;
+  padding: 2px 6px;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+#driver-detail-close:hover { background: rgba(255, 255, 255, 0.15); }
+
+#driver-detail-body { padding: 14px; }
+
+#driver-detail-progress-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy);
+  margin-bottom: 6px;
+}
+
+#driver-detail-progress-labels span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 48%;
+}
+
+#driver-detail-progress-track {
+  height: 10px;
+  background: var(--gray-bg);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+#driver-detail-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--teal);
+  border-radius: 999px;
+  transition: width 0.4s linear;
+}
+
+#driver-detail-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+#driver-detail-stats > div { flex: 1; }
+
+#driver-detail-stats label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+#driver-detail-stats span { font-size: 14px; font-weight: 700; color: var(--navy); }

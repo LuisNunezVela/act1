@@ -403,6 +403,17 @@
   var arrivalToastStack = document.getElementById("arrival-toast-stack");
   var eventLogBody = document.getElementById("event-log-body");
 
+  var driverDetailPanel = document.getElementById("driver-detail-panel");
+  var driverDetailAvatar = document.getElementById("driver-detail-avatar");
+  var driverDetailName = document.getElementById("driver-detail-name");
+  var driverDetailStatus = document.getElementById("driver-detail-status");
+  var driverDetailOrigin = document.getElementById("driver-detail-origin");
+  var driverDetailDest = document.getElementById("driver-detail-dest");
+  var driverDetailProgressFill = document.getElementById("driver-detail-progress-fill");
+  var driverDetailKm = document.getElementById("driver-detail-km");
+  var driverDetailEta = document.getElementById("driver-detail-eta");
+  document.getElementById("driver-detail-close").addEventListener("click", closeDriverDetail);
+
   function setMode(newMode) {
     mode = newMode;
     trafficSelectNodeId = null;
@@ -784,6 +795,7 @@
   var driverTrails = {};        // {traveled, remaining}: L.Polyline, keyed por driver.id
   var driverTimers = {};        // setInterval: tick de movimiento (solo mientras maneja)
   var driverArrivalTimers = {}; // setTimeout: transición pendiente (llegada o fin de descarga)
+  var driverSimState = {};      // {hopBounds, tripRealSeconds, assignedAtMs, originName, destName, totalDistanceM}, para el panel de detalle
 
   function clearDriverSimTimers(driverId) {
     if (driverTimers[driverId]) { clearInterval(driverTimers[driverId]); delete driverTimers[driverId]; }
@@ -820,6 +832,7 @@
     if (driverMarkers[driverId]) { map.removeLayer(driverMarkers[driverId]); delete driverMarkers[driverId]; }
     removeDriverFlag(driverId);
     removeDriverTrail(driverId);
+    delete driverSimState[driverId];
   }
 
   function pointAtDistanceWithinHop(points, targetDist) {
@@ -926,6 +939,16 @@
     var realElapsedSinceAssign = Math.max(0, (Date.now() - assignedAtMs) / 1000);
 
     var destPoint = hops[hops.length - 1].points[hops[hops.length - 1].points.length - 1];
+    var nodePath = driver.route.node_path;
+
+    driverSimState[driver.id] = {
+      hopBounds: hopBounds,
+      tripRealSeconds: tripRealSeconds,
+      assignedAtMs: assignedAtMs,
+      originName: nodesById[nodePath[0]].name,
+      destName: nodesById[nodePath[nodePath.length - 1]].name,
+      totalDistanceM: hops.reduce(function (s, h) { return s + h.distance_m; }, 0),
+    };
 
     if (driverMarkers[driver.id]) map.removeLayer(driverMarkers[driver.id]);
 
@@ -933,6 +956,7 @@
     if (realElapsedSinceAssign >= totalRealSecondsWithUnload) {
       var markerC = L.marker(destPoint, { icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }) }).addTo(map);
       markerC.bindTooltip(driver.name, { direction: "top", offset: [0, -10] });
+      markerC.on("click", function () { openDriverDetail(driver.id); });
       driverMarkers[driver.id] = markerC;
       placeArrivalFlag(driver.id, destPoint);
       finalizeArrival(driver, { suppressToast: true });
@@ -944,6 +968,7 @@
       : destPoint;
     var marker = L.marker(initialPos, { icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }) }).addTo(map);
     marker.bindTooltip(driver.name, { direction: "top", offset: [0, -10] });
+    marker.on("click", function () { openDriverDetail(driver.id); });
     driverMarkers[driver.id] = marker;
 
     // Caso B: ya llegó, en espera de descarga. Camión + bandera fijos en destino, sin animar.
@@ -1039,6 +1064,92 @@
         osc.stop(start + 0.18);
       });
     } catch (e) { /* Web Audio bloqueado/no disponible: el toast visual alcanza */ }
+  }
+
+  // ---------- panel de detalle del chofer (click en el camión 🚚) ----------
+
+  var selectedDriverId = null;
+  var driverDetailInterval = null;
+
+  function computeDriverProgress(driverId) {
+    var s = driverSimState[driverId];
+    if (!s) return null;
+    var realElapsed = Math.max(0, (Date.now() - s.assignedAtMs) / 1000);
+    var tripElapsed = Math.min(realElapsed, s.tripRealSeconds);
+    var elapsed = tripElapsed * SIM_SPEED_FACTOR; // "segundos simulados", misma unidad que hopBounds
+    var traveledM = 0;
+    for (var i = 0; i < s.hopBounds.length; i++) {
+      var hb = s.hopBounds[i];
+      if (elapsed >= hb.end) {
+        traveledM += hb.hop.distance_m;
+      } else if (elapsed > hb.start) {
+        var t = hb.hop.time_s === 0 ? 0 : (elapsed - hb.start) / hb.hop.time_s;
+        traveledM += t * hb.hop.distance_m;
+        break;
+      } else {
+        break;
+      }
+    }
+    var remainingM = Math.max(0, s.totalDistanceM - traveledM);
+    var remainingRealS = Math.max(0, s.tripRealSeconds - realElapsed);
+    var progressPct = s.totalDistanceM === 0 ? 100 : Math.min(100, (traveledM / s.totalDistanceM) * 100);
+    return {
+      progressPct: progressPct,
+      remainingM: remainingM,
+      remainingRealS: remainingRealS,
+      arrived: realElapsed >= s.tripRealSeconds,
+      originName: s.originName,
+      destName: s.destName,
+    };
+  }
+
+  function refreshDriverDetailPanel() {
+    if (!selectedDriverId) return;
+    var driver = drivers.filter(function (d) { return d.id === selectedDriverId; })[0];
+    if (!driver) { closeDriverDetail(); return; }
+
+    var progress = computeDriverProgress(selectedDriverId);
+    if (!progress || driver.status !== "en_ruta") {
+      // ya entregó (o el chofer quedó libre): reflejar el viaje como completado en vez de cerrar de golpe
+      driverDetailProgressFill.style.width = "100%";
+      driverDetailKm.textContent = "0 m";
+      driverDetailEta.textContent = "Entregado";
+      driverDetailStatus.textContent = "Inactivo";
+      return;
+    }
+
+    driverDetailStatus.textContent = progress.arrived ? "Descargando…" : "En ruta";
+    driverDetailOrigin.textContent = progress.originName;
+    driverDetailDest.textContent = progress.destName;
+    driverDetailProgressFill.style.width = progress.progressPct.toFixed(1) + "%";
+    driverDetailKm.textContent = progress.arrived ? "0 m" : fmtMeters(progress.remainingM);
+    driverDetailEta.textContent = progress.arrived ? "Llegó, descargando…" : ("Llega en " + fmtDuration(progress.remainingRealS));
+  }
+
+  function openDriverDetail(driverId) {
+    var driver = drivers.filter(function (d) { return d.id === driverId; })[0];
+    if (!driver) return;
+    selectedDriverId = driverId;
+
+    driverDetailName.textContent = driver.name;
+    if (driver.photo_url) {
+      driverDetailAvatar.style.backgroundImage = "url('" + BACKEND + driver.photo_url + "')";
+      driverDetailAvatar.textContent = "";
+    } else {
+      driverDetailAvatar.style.backgroundImage = "";
+      driverDetailAvatar.textContent = "👤";
+    }
+
+    driverDetailPanel.classList.add("open");
+    refreshDriverDetailPanel();
+    if (driverDetailInterval) clearInterval(driverDetailInterval);
+    driverDetailInterval = setInterval(refreshDriverDetailPanel, 500);
+  }
+
+  function closeDriverDetail() {
+    selectedDriverId = null;
+    driverDetailPanel.classList.remove("open");
+    if (driverDetailInterval) { clearInterval(driverDetailInterval); driverDetailInterval = null; }
   }
 
   function fmtLogTimestamp(iso) {
