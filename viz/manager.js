@@ -280,10 +280,17 @@
 
   var map = L.map("map", { zoomControl: true }).setView(initialCenter, initialZoom);
   map.on("moveend zoomend", saveView);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  var tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);
+
+  var mapOpacitySlider = document.getElementById("map-opacity-slider");
+  var mapOpacityValue = document.getElementById("map-opacity-value");
+  mapOpacitySlider.addEventListener("input", function () {
+    mapOpacityValue.textContent = mapOpacitySlider.value;
+    tileLayer.setOpacity(parseInt(mapOpacitySlider.value, 10) / 100);
+  });
 
   var edgeLayer = L.layerGroup().addTo(map);
   var edgeLineByPair = {};
@@ -661,6 +668,10 @@
     routeSummary.style.display = "block";
     routeDraftLayer.clearLayers();
     L.polyline(polyline, { color: "#1b2350", weight: 5, opacity: 0.85, dashArray: "8 6" }).addTo(routeDraftLayer);
+    // el panel puede tener más contenido del que entra en pantalla (choferes, vías
+    // bloqueadas, etc.) — sin esto, "Finalizar ruta" parece no hacer nada si el resumen
+    // queda debajo del scroll
+    routeSummary.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   function assignRoute(driverId) {

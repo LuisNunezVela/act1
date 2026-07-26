@@ -729,11 +729,11 @@ code {
 #drivers-body #driver-list { background: white; border-radius: 8px; margin-bottom: 10px; }
 #drivers-body .legend { margin: 0; }
 
-/* --- toast de llegada (abajo a la derecha, apila hacia arriba) --- */
+/* --- toast de llegada (abajo a la derecha, apila hacia arriba encima del panel de eventos) --- */
 #arrival-toast-stack {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
+  bottom: 252px;
+  right: 16px;
   z-index: 1200;
   display: flex;
   flex-direction: column;
@@ -772,7 +772,7 @@ code {
 #event-log-panel {
   position: fixed;
   bottom: 16px;
-  left: 16px;
+  right: 16px;
   z-index: 1050;
   width: 340px;
   max-height: 220px;
@@ -816,10 +816,4 @@ code {
 
 @media (max-width: 640px) {
   #event-log-panel { width: calc(100vw - 32px); }
-}
-
-/* modificador de #sidebar SOLO para manager.html: reserva espacio para el panel de eventos
-   sin tocar la regla compartida (demo.html/editor.html no usan .has-log-panel) */
-#sidebar.has-log-panel {
-  max-height: calc(100vh - 32px - 236px);
 }
