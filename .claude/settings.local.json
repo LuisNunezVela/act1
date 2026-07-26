@@ -44,7 +44,8 @@
       "Bash(git mv *)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8791/index.html)",
       "Bash(curl *)",
-      "Bash(pdfinfo /home/luisf/development/uni/act1/Guia_Actividad4.pdf)"
+      "Bash(pdfinfo /home/luisf/development/uni/act1/Guia_Actividad4.pdf)",
+      "PowerShell(\\(Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned\\) ; \\(& d:\\\\development\\\\ia\\\\act1\\\\.venv\\\\Scripts\\\\Activate.ps1\\))"
     ]
   }
 }

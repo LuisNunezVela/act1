@@ -608,3 +608,14 @@ code {
   outline: 1px solid var(--teal);
   border-radius: 4px;
 }
+
+/* --- manager.html specific --- */
+
+.dot-idle { background: var(--teal); }
+.dot-enroute { background: var(--frontier); }
+
+.driver-marker {
+  font-size: 22px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}

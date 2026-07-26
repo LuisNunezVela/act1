@@ -15,6 +15,9 @@ redacta la respuesta conversacional con los números que le pasa el frontend.
 """
 import re
 import json
+import sqlite3
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -42,6 +45,57 @@ def load_number_to_id(path: Path) -> dict[int, str]:
 
 NUMBER_TO_ID = load_number_to_id(DATA_PATH)
 NODES_BY_ID = {n["id"]: n for n in json.loads(DATA_PATH.read_text(encoding="utf-8"))["nodes"]}
+
+EDGE_PAIRS = set()
+for _edge in json.loads(DATA_PATH.read_text(encoding="utf-8"))["edges"]:
+    EDGE_PAIRS.add(frozenset({_edge["source"], _edge["target"]}))
+
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "manager_state.db"
+
+
+def get_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    conn = get_db()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS warehouse (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            node_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS drivers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'idle',
+            route_json TEXT,
+            assigned_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS node_traffic (
+            node_id TEXT PRIMARY KEY,
+            level TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS blocked_edges (
+            node_a TEXT NOT NULL,
+            node_b TEXT NOT NULL,
+            reason TEXT,
+            blocked_at TEXT,
+            PRIMARY KEY (node_a, node_b)
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+init_db()
+
+
+def canonical_pair(a: str, b: str) -> tuple[str, str]:
+    return (a, b) if a < b else (b, a)
 
 
 class RouteQuery(BaseModel):
@@ -154,6 +208,202 @@ def responder():
         return jsonify(error=f"No se pudo generar la respuesta: {exc}"), 502
 
     return jsonify(respuesta=respuesta)
+
+
+TRAFFIC_LEVELS = {"bajo", "medio", "alto"}
+
+
+def load_manager_state() -> dict:
+    conn = get_db()
+    warehouse_row = conn.execute("SELECT node_id FROM warehouse WHERE id = 1").fetchone()
+    driver_rows = conn.execute("SELECT id, name, status, route_json, assigned_at FROM drivers").fetchall()
+    traffic_rows = conn.execute("SELECT node_id, level FROM node_traffic").fetchall()
+    blocked_rows = conn.execute("SELECT node_a, node_b, reason, blocked_at FROM blocked_edges").fetchall()
+    conn.close()
+
+    drivers = []
+    for row in driver_rows:
+        route = json.loads(row["route_json"]) if row["route_json"] else None
+        drivers.append({
+            "id": row["id"],
+            "name": row["name"],
+            "status": row["status"],
+            "route": route,
+            "assigned_at": row["assigned_at"],
+        })
+
+    return {
+        "warehouse_node_id": warehouse_row["node_id"] if warehouse_row else None,
+        "drivers": drivers,
+        "traffic": {r["node_id"]: r["level"] for r in traffic_rows},
+        "blocked_edges": [
+            {"node_a": r["node_a"], "node_b": r["node_b"], "reason": r["reason"], "blocked_at": r["blocked_at"]}
+            for r in blocked_rows
+        ],
+    }
+
+
+@app.route("/manager/state", methods=["GET"])
+def manager_get_state():
+    return jsonify(load_manager_state())
+
+
+@app.route("/manager/warehouse", methods=["POST"])
+def manager_set_warehouse():
+    body = request.get_json(silent=True) or {}
+    node_id = body.get("node_id")
+    if node_id not in NODES_BY_ID:
+        return jsonify(error=f"El nodo {node_id} no existe en el grafo."), 400
+
+    conn = get_db()
+    conn.execute("INSERT OR REPLACE INTO warehouse (id, node_id) VALUES (1, ?)", (node_id,))
+    conn.commit()
+    conn.close()
+    return jsonify(load_manager_state())
+
+
+@app.route("/manager/drivers", methods=["POST"])
+def manager_add_driver():
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify(error="El nombre del chofer no puede estar vacío."), 400
+
+    driver = {"id": uuid.uuid4().hex[:8], "name": name, "status": "idle", "route": None, "assigned_at": None}
+    conn = get_db()
+    conn.execute("INSERT INTO drivers (id, name, status, route_json, assigned_at) VALUES (?, ?, 'idle', NULL, NULL)",
+                 (driver["id"], name))
+    conn.commit()
+    conn.close()
+    return jsonify(driver), 201
+
+
+@app.route("/manager/drivers/<driver_id>", methods=["DELETE"])
+def manager_delete_driver(driver_id):
+    conn = get_db()
+    row = conn.execute("SELECT status FROM drivers WHERE id = ?", (driver_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return jsonify(error="Chofer no encontrado."), 404
+    if row["status"] == "en_ruta":
+        conn.close()
+        return jsonify(error="No se puede eliminar un chofer en ruta."), 409
+    conn.execute("DELETE FROM drivers WHERE id = ?", (driver_id,))
+    conn.commit()
+    conn.close()
+    return jsonify(load_manager_state())
+
+
+@app.route("/manager/drivers/<driver_id>/assign", methods=["POST"])
+def manager_assign_route(driver_id):
+    body = request.get_json(silent=True) or {}
+    required = ["stops", "node_path", "polyline", "distance_m", "time_s"]
+    if not all(k in body for k in required):
+        return jsonify(error="Faltan datos de la ruta."), 400
+
+    conn = get_db()
+    row = conn.execute("SELECT status FROM drivers WHERE id = ?", (driver_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return jsonify(error="Chofer no encontrado."), 404
+    if row["status"] != "idle":
+        conn.close()
+        return jsonify(error="El chofer ya tiene una ruta asignada."), 409
+
+    route = {
+        "stops": body["stops"],
+        "node_path": body["node_path"],
+        "polyline": body["polyline"],
+        "distance_m": body["distance_m"],
+        "time_s": body["time_s"],
+        "peak_hour": bool(body.get("peak_hour", False)),
+    }
+    assigned_at = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "UPDATE drivers SET status = 'en_ruta', route_json = ?, assigned_at = ? WHERE id = ?",
+        (json.dumps(route, ensure_ascii=False), assigned_at, driver_id),
+    )
+    conn.commit()
+    conn.close()
+    route["assigned_at"] = assigned_at
+    return jsonify({"id": driver_id, "status": "en_ruta", "route": route})
+
+
+@app.route("/manager/drivers/<driver_id>/complete", methods=["POST"])
+def manager_complete_route(driver_id):
+    conn = get_db()
+    row = conn.execute("SELECT status FROM drivers WHERE id = ?", (driver_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return jsonify(error="Chofer no encontrado."), 404
+    conn.execute("UPDATE drivers SET status = 'idle', route_json = NULL, assigned_at = NULL WHERE id = ?", (driver_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"id": driver_id, "status": "idle", "route": None})
+
+
+@app.route("/manager/traffic", methods=["POST"])
+def manager_set_traffic():
+    body = request.get_json(silent=True) or {}
+    node_id = body.get("node_id")
+    level = body.get("level")
+    if node_id not in NODES_BY_ID:
+        return jsonify(error=f"El nodo {node_id} no existe en el grafo."), 400
+
+    conn = get_db()
+    if not level or level == "ninguno":
+        conn.execute("DELETE FROM node_traffic WHERE node_id = ?", (node_id,))
+    elif level in TRAFFIC_LEVELS:
+        conn.execute("INSERT OR REPLACE INTO node_traffic (node_id, level) VALUES (?, ?)", (node_id, level))
+    else:
+        conn.close()
+        return jsonify(error="Nivel de tráfico inválido."), 400
+    conn.commit()
+    traffic_rows = conn.execute("SELECT node_id, level FROM node_traffic").fetchall()
+    conn.close()
+    return jsonify({r["node_id"]: r["level"] for r in traffic_rows})
+
+
+@app.route("/manager/blocked-edges", methods=["POST"])
+def manager_block_edge():
+    body = request.get_json(silent=True) or {}
+    node_a = body.get("node_a")
+    node_b = body.get("node_b")
+    reason = (body.get("reason") or "Bloqueado").strip() or "Bloqueado"
+
+    if node_a not in NODES_BY_ID or node_b not in NODES_BY_ID:
+        return jsonify(error="Uno de los nodos no existe en el grafo."), 400
+    if frozenset({node_a, node_b}) not in EDGE_PAIRS:
+        return jsonify(error="No hay una calle directa entre esos nodos."), 400
+
+    a, b = canonical_pair(node_a, node_b)
+    blocked_at = datetime.now(timezone.utc).isoformat()
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO blocked_edges (node_a, node_b, reason, blocked_at) VALUES (?, ?, ?, ?)",
+        (a, b, reason, blocked_at),
+    )
+    conn.commit()
+    blocked_rows = conn.execute("SELECT node_a, node_b, reason, blocked_at FROM blocked_edges").fetchall()
+    conn.close()
+    return jsonify([
+        {"node_a": r["node_a"], "node_b": r["node_b"], "reason": r["reason"], "blocked_at": r["blocked_at"]}
+        for r in blocked_rows
+    ]), 201
+
+
+@app.route("/manager/blocked-edges/<node_a>/<node_b>", methods=["DELETE"])
+def manager_unblock_edge(node_a, node_b):
+    a, b = canonical_pair(node_a, node_b)
+    conn = get_db()
+    conn.execute("DELETE FROM blocked_edges WHERE node_a = ? AND node_b = ?", (a, b))
+    conn.commit()
+    blocked_rows = conn.execute("SELECT node_a, node_b, reason, blocked_at FROM blocked_edges").fetchall()
+    conn.close()
+    return jsonify([
+        {"node_a": r["node_a"], "node_b": r["node_b"], "reason": r["reason"], "blocked_at": r["blocked_at"]}
+        for r in blocked_rows
+    ])
 
 
 if __name__ == "__main__":

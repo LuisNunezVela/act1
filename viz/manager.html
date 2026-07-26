@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EasyRoute — Gestor de reparto</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="sidebar">
+<div id="panel">
+  <h1>Gestor de reparto</h1>
+  <p class="subtitle">Administra almacén, choferes y rutas simuladas sobre el grafo de Santa Cruz.</p>
+
+  <div class="mode-row">
+    <button class="mode-btn" data-mode="none">🖐 Mover mapa</button>
+    <button class="mode-btn" data-mode="set-almacen">🏬 Fijar almacén</button>
+    <button class="mode-btn" data-mode="set-traffic">🚦 Nivel de tráfico</button>
+    <button class="mode-btn" data-mode="block-edge">🚧 Evitar ruta</button>
+    <button class="mode-btn" data-mode="route-stops">🚚 Nueva ruta</button>
+  </div>
+
+  <div id="status-box">Elige una acción: fijar almacén, tráfico, bloquear una calle o armar una ruta.</div>
+
+  <div class="field">
+    <label>Almacén</label>
+    <div id="warehouse-label" class="node-chip">—</div>
+  </div>
+
+  <div id="traffic-select-wrap" class="field" style="display:none;">
+    <label>Tráfico en <span id="traffic-node-label">—</span></label>
+    <div class="field-group" style="flex-wrap:wrap;">
+      <button class="btn-secondary traffic-level-btn" data-level="bajo">Bajo</button>
+      <button class="btn-secondary traffic-level-btn" data-level="medio">Medio</button>
+      <button class="btn-secondary traffic-level-btn" data-level="alto">Alto</button>
+      <button class="btn-secondary traffic-level-btn" data-level="">Quitar</button>
+    </div>
+  </div>
+
+  <div id="blocked-wrap" class="field" style="display:none;">
+    <label>Vías bloqueadas</label>
+    <div id="blocked-list"></div>
+  </div>
+
+  <div id="route-draft-wrap" class="field" style="display:none;">
+    <label>Paradas seleccionadas</label>
+    <div id="route-draft-chips"></div>
+    <button id="btn-finalize-route" class="btn-primary btn-block">Finalizar ruta</button>
+    <button id="btn-cancel-route" class="btn-secondary btn-block">Cancelar</button>
+  </div>
+
+  <div id="route-summary" style="display:none;">
+    <h2>Ruta óptima</h2>
+    <div id="route-summary-body"></div>
+    <div class="field">
+      <label>Asignar a chofer</label>
+      <select id="driver-select"></select>
+    </div>
+    <button id="btn-assign-route" class="btn-primary btn-block">Asignar ruta</button>
+  </div>
+
+  <div class="field">
+    <label><input type="checkbox" id="peak-toggle"> Modo hora pico (ruta óptima por tiempo, evita nodos con tráfico alto)</label>
+  </div>
+
+  <hr>
+
+  <div class="field-group">
+    <input type="text" id="driver-name-input" placeholder="Nombre del chofer">
+    <button id="btn-add-driver" class="btn-primary">Agregar</button>
+  </div>
+
+  <div id="node-list-wrap">
+    <label>Choferes</label>
+    <div id="driver-list"></div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><span class="dot dot-idle"></span> Chofer inactivo</div>
+    <div class="legend-item"><span class="dot dot-enroute"></span> Chofer en ruta</div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><span class="dot dot-unvisited"></span> Sin nivel de tráfico</div>
+    <div class="legend-item"><span class="dot dot-visited"></span> Tráfico bajo</div>
+    <div class="legend-item"><span class="dot dot-frontier"></span> Tráfico medio</div>
+    <div class="legend-item"><span class="dot dot-current"></span> Tráfico alto</div>
+  </div>
+</div>
+
+<div id="page-nav">
+  <a href="index.html">🏠 Menú</a>
+  <a href="demo.html">🔎 Buscar ruta</a>
+  <a href="editor.html">✏️ Editor</a>
+  <a href="manager.html" class="active">🚚 Reparto</a>
+</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="graph_data.js"></script>
+<script src="manager.js"></script>
+</body>
+</html>
