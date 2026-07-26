@@ -12,7 +12,7 @@
 
 <div id="map"></div>
 
-<div id="sidebar">
+<div id="sidebar" class="has-log-panel">
 <div id="panel">
   <h1>Gestor de reparto</h1>
   <p class="subtitle">Administra almacén, choferes y rutas simuladas sobre el grafo de Santa Cruz.</p>
@@ -103,6 +103,13 @@
     </div>
     <input type="file" id="driver-photo-input" accept="image/*" style="display:none;">
   </div>
+</div>
+
+<div id="arrival-toast-stack"></div>
+
+<div id="event-log-panel">
+  <div id="event-log-header">📜 Registro de eventos</div>
+  <div id="event-log-body"></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"

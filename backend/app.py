@@ -89,6 +89,12 @@ def init_db() -> None:
             blocked_at TEXT,
             PRIMARY KEY (node_a, node_b)
         );
+        CREATE TABLE IF NOT EXISTS event_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            icon TEXT,
+            message TEXT NOT NULL
+        );
         """
     )
     driver_cols = {row["name"] for row in conn.execute("PRAGMA table_info(drivers)").fetchall()}
@@ -353,10 +359,46 @@ def manager_complete_route(driver_id):
     if row is None:
         conn.close()
         return jsonify(error="Chofer no encontrado."), 404
-    conn.execute("UPDATE drivers SET status = 'idle', route_json = NULL, assigned_at = NULL WHERE id = ?", (driver_id,))
+    # UPDATE...WHERE status='en_ruta' + rowcount es atómico a nivel SQL: si dos pestañas
+    # llaman a este endpoint casi al mismo tiempo para el mismo chofer, solo una de las dos
+    # consigue actualizar la fila (SQLite serializa escrituras concurrentes), sin depender de
+    # que el servidor Flask sea single-threaded (que en la práctica no siempre lo es)
+    cur = conn.execute(
+        "UPDATE drivers SET status = 'idle', route_json = NULL, assigned_at = NULL WHERE id = ? AND status = 'en_ruta'",
+        (driver_id,),
+    )
+    was_en_ruta = cur.rowcount > 0
     conn.commit()
     conn.close()
-    return jsonify({"id": driver_id, "status": "idle", "route": None})
+    return jsonify({"id": driver_id, "status": "idle", "route": None, "was_en_ruta": was_en_ruta})
+
+
+@app.route("/manager/log", methods=["GET"])
+def manager_get_log():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, ts, icon, message FROM ("
+        "  SELECT id, ts, icon, message FROM event_log ORDER BY id DESC LIMIT 200"
+        ") sub ORDER BY id ASC"
+    ).fetchall()
+    conn.close()
+    return jsonify([{"id": r["id"], "ts": r["ts"], "icon": r["icon"], "message": r["message"]} for r in rows])
+
+
+@app.route("/manager/log", methods=["POST"])
+def manager_post_log():
+    body = request.get_json(silent=True) or {}
+    message = (body.get("message") or "").strip()
+    if not message:
+        return jsonify(error="El mensaje no puede estar vacío."), 400
+    icon = body.get("icon") or None
+    ts = datetime.now(timezone.utc).isoformat()
+    conn = get_db()
+    cur = conn.execute("INSERT INTO event_log (ts, icon, message) VALUES (?, ?, ?)", (ts, icon, message))
+    conn.commit()
+    row_id = cur.lastrowid
+    conn.close()
+    return jsonify({"id": row_id, "ts": ts, "icon": icon, "message": message}), 201
 
 
 @app.route("/manager/traffic", methods=["POST"])

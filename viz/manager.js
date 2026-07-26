@@ -20,12 +20,15 @@
     defaultBorder: "#5b6478",
     blocked: "#e5484d",
     edgeDefault: "#9aa3b5",
+    trailRemaining: "#14b8a6", // var(--teal); tramo por recorrer del trail
   };
 
   var TRAFFIC_MULTIPLIER = { bajo: 1.15, medio: 1.5, alto: 2.0 };
   var AVG_SPEED_MPS = (30 * 1000) / 3600; // 30 km/h promedio urbano
   var SIM_TICK_MS = 100;
   var SIM_SPEED_FACTOR = 1; // 1 s real = 1 s simulado (tiempo real, para revisar que todo ande bien)
+  var UNLOAD_WAIT_S = 20;          // espera real fija de "descarga" al llegar — NO se escala por SIM_SPEED_FACTOR
+  var TOAST_AUTO_DISMISS_MS = 6000;
 
   // ---------- geometry helpers (duplicados de app.js, cada página es autocontenida) ----------
 
@@ -390,6 +393,9 @@
   driversToggleBtn.addEventListener("click", function () { driversDrawer.classList.toggle("open"); });
   driversMinimizeBtn.addEventListener("click", function () { driversDrawer.classList.remove("open"); });
 
+  var arrivalToastStack = document.getElementById("arrival-toast-stack");
+  var eventLogBody = document.getElementById("event-log-body");
+
   function setMode(newMode) {
     mode = newMode;
     trafficSelectNodeId = null;
@@ -662,6 +668,7 @@
       if (!r.ok) { alert(r.data.error || "No se pudo asignar la ruta."); return; }
       var merged = updateLocalDriver(r.data);
       startDriverSimulation(merged);
+      logEvent("🚚", merged.name + " inició un viaje (" + fmtMeters(merged.route.distance_m) + ", " + fmtDuration(merged.route.time_s) + ")");
       routeDraftStops = [];
       currentRouteDraft = null;
       renderRouteDraftChips();
@@ -761,8 +768,48 @@
 
   // ---------- simulación ----------
 
-  var driverMarkers = {};
-  var driverTimers = {};
+  var driverMarkers = {};       // 🚚, keyed por driver.id
+  var driverFlagMarkers = {};   // 🚩 al llegar, keyed por driver.id
+  var driverTrails = {};        // {traveled, remaining}: L.Polyline, keyed por driver.id
+  var driverTimers = {};        // setInterval: tick de movimiento (solo mientras maneja)
+  var driverArrivalTimers = {}; // setTimeout: transición pendiente (llegada o fin de descarga)
+
+  function clearDriverSimTimers(driverId) {
+    if (driverTimers[driverId]) { clearInterval(driverTimers[driverId]); delete driverTimers[driverId]; }
+    if (driverArrivalTimers[driverId]) { clearTimeout(driverArrivalTimers[driverId]); delete driverArrivalTimers[driverId]; }
+  }
+
+  function ensureDriverTrail(driverId) {
+    if (!driverTrails[driverId]) {
+      driverTrails[driverId] = {
+        traveled: L.polyline([], { color: COLORS.edgeDefault, weight: 5, opacity: 0.85 }).addTo(map),
+        remaining: L.polyline([], { color: COLORS.trailRemaining, weight: 5, opacity: 0.85 }).addTo(map),
+      };
+    }
+    return driverTrails[driverId];
+  }
+
+  function removeDriverTrail(driverId) {
+    var trail = driverTrails[driverId];
+    if (trail) { map.removeLayer(trail.traveled); map.removeLayer(trail.remaining); delete driverTrails[driverId]; }
+  }
+
+  function placeArrivalFlag(driverId, point) {
+    if (driverFlagMarkers[driverId]) return;
+    driverFlagMarkers[driverId] = L.marker(point, {
+      icon: L.divIcon({ className: "driver-marker arrival-flag", html: "🚩", iconSize: null }),
+    }).addTo(map);
+  }
+
+  function removeDriverFlag(driverId) {
+    if (driverFlagMarkers[driverId]) { map.removeLayer(driverFlagMarkers[driverId]); delete driverFlagMarkers[driverId]; }
+  }
+
+  function removeDriverMarkerAndTrail(driverId) {
+    if (driverMarkers[driverId]) { map.removeLayer(driverMarkers[driverId]); delete driverMarkers[driverId]; }
+    removeDriverFlag(driverId);
+    removeDriverTrail(driverId);
+  }
 
   function pointAtDistanceWithinHop(points, targetDist) {
     var acc = 0;
@@ -788,12 +835,68 @@
     return pointAtDistanceWithinHop(b.hop.points, t * b.hop.distance_m);
   }
 
-  // driver.route.assigned_at permite RETOMAR una simulación en curso (por ejemplo,
-  // tras recargar la página) desde el tiempo real transcurrido en vez de reiniciarla
-  // desde el almacén — así una recarga externa (o volver a abrir la pestaña) no hace
-  // que el camión "salte" hacia atrás en su recorrido
+  // separa el recorrido en dos listas de puntos (recorrido/restante) para pintar el trail de
+  // dos colores; usa el mismo cálculo que positionAtElapsed/pointAtDistanceWithinHop para que
+  // el punto de corte coincida exactamente con la posición del marcador del camión
+  function splitHopAtDistance(points, targetDist) {
+    var acc = 0;
+    for (var i = 0; i < points.length - 1; i++) {
+      var segLen = haversineMeters(points[i], points[i + 1]);
+      if (acc + segLen >= targetDist) {
+        var t = segLen === 0 ? 0 : (targetDist - acc) / segLen;
+        var a = points[i], b = points[i + 1];
+        var point = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        return { before: points.slice(0, i + 1), point: point, after: points.slice(i + 1) };
+      }
+      acc += segLen;
+    }
+    return { before: points.slice(0, points.length - 1), point: points[points.length - 1], after: [] };
+  }
+
+  function appendHopPoints(target, points, skipFirst) {
+    for (var i = skipFirst ? 1 : 0; i < points.length; i++) target.push(points[i]);
+  }
+
+  function computeTrailSplit(hops, hopBounds, totalTime, elapsed) {
+    var e = Math.min(Math.max(elapsed, 0), totalTime);
+    var b = hopBounds.filter(function (hb) { return e >= hb.start && e < hb.end; })[0];
+    var bIdx = b ? hopBounds.indexOf(b) : hops.length; // sin match => e === totalTime
+    var traveled = [], remaining = [];
+    for (var i = 0; i < hops.length; i++) {
+      if (i < bIdx) {
+        appendHopPoints(traveled, hops[i].points, i > 0);
+      } else if (i === bIdx) {
+        var t = b.hop.time_s === 0 ? 0 : (e - b.start) / b.hop.time_s;
+        var split = splitHopAtDistance(hops[i].points, t * hops[i].distance_m);
+        appendHopPoints(traveled, split.before, i > 0);
+        traveled.push(split.point);
+        remaining.push(split.point);
+        appendHopPoints(remaining, split.after, false);
+      } else {
+        appendHopPoints(remaining, hops[i].points, true);
+      }
+    }
+    return { traveled: traveled, remaining: remaining };
+  }
+
+  function updateDriverTrail(driverId, hops, hopBounds, totalTime, elapsed) {
+    var trail = ensureDriverTrail(driverId);
+    var split = computeTrailSplit(hops, hopBounds, totalTime, elapsed);
+    trail.traveled.setLatLngs(split.traveled);
+    trail.remaining.setLatLngs(split.remaining);
+  }
+
+  // driver.route.assigned_at permite RETOMAR una simulación en curso (por ejemplo, tras
+  // recargar la página) desde el tiempo real transcurrido en vez de reiniciarla desde el
+  // almacén. Tres casos posibles según cuánto tiempo real pasó desde assigned_at:
+  //   A) todavía manejando           -> retoma la animación + agenda la llegada
+  //   B) llegó, esperando descarga   -> camión+bandera fijos en destino, agenda el resto de la espera
+  //   C) viaje + descarga ya pasaron -> finaliza de inmediato, sin animación ni aviso (evento viejo)
+  // La espera de descarga (UNLOAD_WAIT_S) es tiempo REAL fijo, no se escala por SIM_SPEED_FACTOR.
   function startDriverSimulation(driver) {
-    if (driverTimers[driver.id]) { clearInterval(driverTimers[driver.id]); delete driverTimers[driver.id]; }
+    clearDriverSimTimers(driver.id);
+    removeDriverFlag(driver.id); // limpia una bandera de una simulación previa si se re-entra
+
     var peakOn = driver.route.peak_hour;
     var hops = buildHopsFromNodePath(driver.route.node_path, peakOn);
     if (hops.length === 0) return;
@@ -803,50 +906,163 @@
       var start = cumTime; cumTime += h.time_s;
       return { start: start, end: cumTime, hop: h };
     });
-    var totalTime = cumTime;
+    var totalTime = cumTime; // segundos "simulados" (ya con tráfico aplicado)
 
-    var elapsed = 0;
-    if (driver.route.assigned_at) {
-      var realElapsedSeconds = (Date.now() - new Date(driver.route.assigned_at).getTime()) / 1000;
-      elapsed = Math.max(0, realElapsedSeconds * SIM_SPEED_FACTOR);
-    }
+    var tripRealSeconds = totalTime / SIM_SPEED_FACTOR;
+    var totalRealSecondsWithUnload = tripRealSeconds + UNLOAD_WAIT_S;
+
+    var assignedAtMs = driver.route.assigned_at ? new Date(driver.route.assigned_at).getTime() : Date.now();
+    var realElapsedSinceAssign = Math.max(0, (Date.now() - assignedAtMs) / 1000);
+
+    var destPoint = hops[hops.length - 1].points[hops[hops.length - 1].points.length - 1];
 
     if (driverMarkers[driver.id]) map.removeLayer(driverMarkers[driver.id]);
-    var marker = L.marker(positionAtElapsed(hops, hopBounds, elapsed), {
-      icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }),
-    }).addTo(map);
+
+    // Caso C: viaje + descarga ya terminaron mientras la página estaba cerrada/recargando.
+    if (realElapsedSinceAssign >= totalRealSecondsWithUnload) {
+      var markerC = L.marker(destPoint, { icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }) }).addTo(map);
+      markerC.bindTooltip(driver.name, { direction: "top", offset: [0, -10] });
+      driverMarkers[driver.id] = markerC;
+      placeArrivalFlag(driver.id, destPoint);
+      finalizeArrival(driver, { suppressToast: true });
+      return;
+    }
+
+    var initialPos = realElapsedSinceAssign < tripRealSeconds
+      ? positionAtElapsed(hops, hopBounds, realElapsedSinceAssign * SIM_SPEED_FACTOR)
+      : destPoint;
+    var marker = L.marker(initialPos, { icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }) }).addTo(map);
     marker.bindTooltip(driver.name, { direction: "top", offset: [0, -10] });
     driverMarkers[driver.id] = marker;
 
-    if (elapsed >= totalTime) {
-      onSimulationComplete(driver);
+    // Caso B: ya llegó, en espera de descarga. Camión + bandera fijos en destino, sin animar.
+    if (realElapsedSinceAssign >= tripRealSeconds) {
+      updateDriverTrail(driver.id, hops, hopBounds, totalTime, totalTime);
+      placeArrivalFlag(driver.id, destPoint);
+      var remainingUnloadMs = (totalRealSecondsWithUnload - realElapsedSinceAssign) * 1000;
+      driverArrivalTimers[driver.id] = setTimeout(function () { finalizeArrival(driver); }, remainingUnloadMs);
       return;
     }
+
+    // Caso A: todavía manejando. Retoma animación + trail, agenda la transición a "descarga"
+    // para el instante exacto en que el viaje debería terminar.
+    var elapsed = realElapsedSinceAssign * SIM_SPEED_FACTOR;
+    updateDriverTrail(driver.id, hops, hopBounds, totalTime, elapsed);
 
     driverTimers[driver.id] = setInterval(function () {
       elapsed += (SIM_TICK_MS / 1000) * SIM_SPEED_FACTOR;
       if (elapsed >= totalTime) {
-        var lastHop = hops[hops.length - 1];
-        marker.setLatLng(lastHop.points[lastHop.points.length - 1]);
+        elapsed = totalTime;
+        marker.setLatLng(destPoint);
+        updateDriverTrail(driver.id, hops, hopBounds, totalTime, totalTime);
         clearInterval(driverTimers[driver.id]);
         delete driverTimers[driver.id];
-        onSimulationComplete(driver);
         return;
       }
       marker.setLatLng(positionAtElapsed(hops, hopBounds, elapsed));
+      updateDriverTrail(driver.id, hops, hopBounds, totalTime, elapsed);
     }, SIM_TICK_MS);
+
+    driverArrivalTimers[driver.id] = setTimeout(function () {
+      marker.setLatLng(destPoint);
+      updateDriverTrail(driver.id, hops, hopBounds, totalTime, totalTime);
+      if (driverTimers[driver.id]) { clearInterval(driverTimers[driver.id]); delete driverTimers[driver.id]; }
+      placeArrivalFlag(driver.id, destPoint);
+      driverArrivalTimers[driver.id] = setTimeout(function () { finalizeArrival(driver); }, UNLOAD_WAIT_S * 1000);
+    }, (tripRealSeconds - realElapsedSinceAssign) * 1000);
   }
 
-  function onSimulationComplete(driver) {
+  function finalizeArrival(driver, opts) {
+    opts = opts || {};
+    delete driverArrivalTimers[driver.id];
     api("POST", "/manager/drivers/" + driver.id + "/complete").then(function (r) {
       if (!r.ok) return;
-      updateLocalDriver(r.data);
+      var updated = updateLocalDriver(r.data);
+      removeDriverMarkerAndTrail(driver.id);
+      if (r.data.was_en_ruta) {
+        logEvent("🚩", updated.name + " ha llegado al destino");
+        if (!opts.suppressToast) {
+          showArrivalToast(updated);
+          playArrivalChime();
+        }
+      }
+    });
+  }
+
+  function showArrivalToast(driver) {
+    var toast = document.createElement("div");
+    toast.className = "arrival-toast";
+    var icon = document.createElement("span");
+    icon.className = "arrival-toast-icon";
+    icon.textContent = "🚩";
+    var text = document.createElement("span");
+    text.className = "arrival-toast-text";
+    var strong = document.createElement("strong");
+    strong.textContent = driver.name;
+    var sub = document.createElement("span");
+    sub.textContent = "llegó a destino";
+    text.appendChild(strong);
+    text.appendChild(sub);
+    toast.appendChild(icon);
+    toast.appendChild(text);
+    arrivalToastStack.appendChild(toast);
+    setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, TOAST_AUTO_DISMISS_MS);
+  }
+
+  var audioCtx = null;
+  function playArrivalChime() {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var now = audioCtx.currentTime;
+      [660, 880].forEach(function (freq, i) {
+        var osc = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        var start = now + i * 0.14;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.25, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
+        osc.connect(gain).connect(audioCtx.destination);
+        osc.start(start);
+        osc.stop(start + 0.18);
+      });
+    } catch (e) { /* Web Audio bloqueado/no disponible: el toast visual alcanza */ }
+  }
+
+  function fmtLogTimestamp(iso) {
+    var d = new Date(iso);
+    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+    return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  function appendLogEntry(entry) {
+    var line = document.createElement("div");
+    line.className = "event-log-line";
+    var ts = document.createElement("span");
+    ts.className = "event-log-ts";
+    ts.textContent = fmtLogTimestamp(entry.ts);
+    line.appendChild(ts);
+    line.appendChild(document.createTextNode((entry.icon ? entry.icon + " " : "") + entry.message));
+    eventLogBody.appendChild(line);
+    eventLogBody.scrollTop = eventLogBody.scrollHeight;
+  }
+
+  function logEvent(icon, message) {
+    api("POST", "/manager/log", { icon: icon, message: message }).then(function (r) {
+      if (!r.ok) return;
+      appendLogEntry(r.data);
     });
   }
 
   // ---------- init ----------
 
   function registerLocalDriver(d) { drivers.push(d); }
+
+  api("GET", "/manager/log").then(function (r) {
+    if (!r.ok) return;
+    r.data.forEach(appendLogEntry);
+  });
 
   api("GET", "/manager/state").then(function (r) {
     var state = r.data;
@@ -877,5 +1093,10 @@
     GRAPH_DATA: GRAPH_DATA,
     map: map,
     onNodeClick: onNodeClick,
+    get driverMarkers() { return driverMarkers; },
+    get driverFlagMarkers() { return driverFlagMarkers; },
+    get driverTrails() { return driverTrails; },
+    get driverTimers() { return driverTimers; },
+    get driverArrivalTimers() { return driverArrivalTimers; },
   };
 })();
