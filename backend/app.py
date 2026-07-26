@@ -19,6 +19,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
@@ -111,6 +112,16 @@ def canonical_pair(a: str, b: str) -> tuple[str, str]:
     return (a, b) if a < b else (b, a)
 
 
+def resolve_driver_by_name(conn, name_query: str):
+    q = name_query.strip().lower()
+    rows = conn.execute("SELECT id, name, status FROM drivers").fetchall()
+    for r in rows:
+        if r["name"].strip().lower() == q:
+            return r
+    candidates = [r for r in rows if q in r["name"].strip().lower() or r["name"].strip().lower() in q]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 class RouteQuery(BaseModel):
     origen_numero: int = Field(
         description="Número que acompaña a la palabra 'nodo' para el punto de origen mencionado en la pregunta."
@@ -156,9 +167,61 @@ explain_prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
+class ManagerIntent(BaseModel):
+    intent: Literal["consulta_tiempo", "despacho", "otro"] = Field(
+        description="'consulta_tiempo' si pregunta cuánto tiempo/distancia toma llegar a un "
+        "nodo; 'despacho' si pide enviar/asignar a un chofer a hacer una entrega en una o más "
+        "paradas; 'otro' si no corresponde a ninguno de los anteriores."
+    )
+    origen_numero: int | None = Field(
+        None,
+        description="Número de nodo de origen si se menciona explícitamente. Si la pregunta "
+        "dice 'desde el almacén'/'depósito' o no menciona origen, deja este campo null.",
+    )
+    destino_numero: int | None = Field(
+        None, description="Número de nodo destino, solo para intent='consulta_tiempo'."
+    )
+    chofer_nombre: str | None = Field(
+        None, description="Nombre del chofer mencionado, solo para intent='despacho'."
+    )
+    paradas_numeros: list[int] = Field(
+        default_factory=list, description="Números de nodo a visitar, solo para intent='despacho'."
+    )
+
+
+manager_intent_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "Interpretas pedidos en un gestor de reparto sobre un grafo vial. Los nodos se "
+            "identifican como 'nodo' seguido de un número. Clasifica el pedido como "
+            "'consulta_tiempo' (preguntan cuánto tarda/cuánto falta a un nodo), 'despacho' "
+            "(piden enviar un chofer a una o más paradas) u 'otro'. Extrae solo los números y "
+            "nombres presentes en el texto, no inventes datos.",
+        ),
+        ("human", "{query}"),
+    ]
+)
+
+manager_confirm_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "Eres el asistente del Gestor de reparto de EasyRoute. Te dan el pedido original "
+            "del usuario y un resumen con los datos ya calculados (distancia, tiempo, chofer, "
+            "orden de paradas). Responde en español, tono conversacional y breve (1 a 3 "
+            "oraciones), confirmando el dato o la acción usando exclusivamente los "
+            "números/nombres del resumen. No inventes cifras ni repitas el pedido textualmente.",
+        ),
+        ("human", "Pedido: {query}\nResumen: {resumen}"),
+    ]
+)
+
 llm = ChatGoogleGenerativeAI(model="gemini-flash-latest")
 chain = prompt | llm.with_structured_output(RouteQuery)
 explain_chain = explain_prompt | llm | StrOutputParser()
+manager_intent_chain = manager_intent_prompt | llm.with_structured_output(ManagerIntent)
+manager_confirm_chain = manager_confirm_prompt | llm | StrOutputParser()
 
 app = Flask(__name__)
 CORS(app)  # dev local: frontend estático y backend corren en orígenes distintos
@@ -217,6 +280,86 @@ def responder():
                 "dfs_pathlen": body["dfs"]["path_length"],
             }
         )
+    except Exception as exc:  # error de LLM o payload mal formado
+        return jsonify(error=f"No se pudo generar la respuesta: {exc}"), 502
+
+    return jsonify(respuesta=respuesta)
+
+
+@app.route("/manager/chat/parse", methods=["POST"])
+def manager_chat_parse():
+    body = request.get_json(silent=True) or {}
+    query = (body.get("query") or "").strip()
+    if not query:
+        return jsonify(error="El pedido está vacío."), 400
+
+    try:
+        result = manager_intent_chain.invoke({"query": query})
+    except Exception as exc:  # error de LLM/parsing
+        return jsonify(error=f"No se pudo interpretar el pedido: {exc}"), 502
+
+    conn = get_db()
+    try:
+        warehouse_row = conn.execute("SELECT node_id FROM warehouse WHERE id = 1").fetchone()
+        warehouse_id = warehouse_row["node_id"] if warehouse_row else None
+
+        if result.intent == "consulta_tiempo":
+            origen_id = NUMBER_TO_ID.get(result.origen_numero) if result.origen_numero is not None else warehouse_id
+            destino_id = NUMBER_TO_ID.get(result.destino_numero) if result.destino_numero is not None else None
+            if origen_id is None:
+                return jsonify(error="No hay un almacén fijado ni se indicó un origen válido."), 400
+            if destino_id is None:
+                return jsonify(error=f"No existe el Nodo {result.destino_numero} en el grafo."), 400
+            return jsonify(
+                intent="consulta_tiempo",
+                origen_id=origen_id,
+                origen_nombre=NODES_BY_ID[origen_id]["name"],
+                destino_id=destino_id,
+                destino_nombre=NODES_BY_ID[destino_id]["name"],
+            )
+
+        if result.intent == "despacho":
+            if not result.chofer_nombre:
+                return jsonify(error="No entendí a qué chofer enviar."), 400
+            driver_row = resolve_driver_by_name(conn, result.chofer_nombre)
+            if driver_row is None:
+                return jsonify(error=f"No encontré un chofer llamado '{result.chofer_nombre}'."), 404
+            if driver_row["status"] != "idle":
+                return jsonify(error=f"{driver_row['name']} ya está en una ruta."), 409
+            if not result.paradas_numeros:
+                return jsonify(error="No entendí las paradas de la entrega."), 400
+            if warehouse_id is None:
+                return jsonify(error="Primero fija el almacén."), 400
+            paradas_ids = []
+            for num in result.paradas_numeros:
+                node_id = NUMBER_TO_ID.get(num)
+                if node_id is None:
+                    return jsonify(error=f"No existe el Nodo {num} en el grafo."), 400
+                paradas_ids.append(node_id)
+            return jsonify(
+                intent="despacho",
+                chofer_id=driver_row["id"],
+                chofer_nombre=driver_row["name"],
+                warehouse_id=warehouse_id,
+                paradas_ids=paradas_ids,
+                paradas_nombres=[NODES_BY_ID[i]["name"] for i in paradas_ids],
+            )
+
+        return jsonify(intent="otro")
+    finally:
+        conn.close()
+
+
+@app.route("/manager/chat/confirm", methods=["POST"])
+def manager_chat_confirm():
+    body = request.get_json(silent=True) or {}
+    query = (body.get("query") or "").strip()
+    resumen = (body.get("resumen") or "").strip()
+    if not query or not resumen:
+        return jsonify(error="Faltan datos para generar la respuesta."), 400
+
+    try:
+        respuesta = manager_confirm_chain.invoke({"query": query, "resumen": resumen})
     except Exception as exc:  # error de LLM o payload mal formado
         return jsonify(error=f"No se pudo generar la respuesta: {exc}"), 502
 
@@ -375,12 +518,20 @@ def manager_complete_route(driver_id):
 
 @app.route("/manager/log", methods=["GET"])
 def manager_get_log():
+    date_from = request.args.get("from")
+    date_to = request.args.get("to")
     conn = get_db()
-    rows = conn.execute(
-        "SELECT id, ts, icon, message FROM ("
-        "  SELECT id, ts, icon, message FROM event_log ORDER BY id DESC LIMIT 200"
-        ") sub ORDER BY id ASC"
-    ).fetchall()
+    if date_from and date_to:
+        rows = conn.execute(
+            "SELECT id, ts, icon, message FROM event_log WHERE ts >= ? AND ts < ? ORDER BY id ASC",
+            (date_from, date_to),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, ts, icon, message FROM ("
+            "  SELECT id, ts, icon, message FROM event_log ORDER BY id DESC LIMIT 200"
+            ") sub ORDER BY id ASC"
+        ).fetchall()
     conn.close()
     return jsonify([{"id": r["id"], "ts": r["ts"], "icon": r["icon"], "message": r["message"]} for r in rows])
 

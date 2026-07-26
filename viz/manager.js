@@ -403,6 +403,15 @@
   var arrivalToastStack = document.getElementById("arrival-toast-stack");
   var eventLogBody = document.getElementById("event-log-body");
 
+  var chatWidget = document.getElementById("chat-widget");
+  var chatToggleBtn = document.getElementById("chat-toggle-btn");
+  var chatMinimizeBtn = document.getElementById("chat-minimize-btn");
+  var chatMessages = document.getElementById("chat-messages");
+  var askInput = document.getElementById("ask-input");
+  var btnAsk = document.getElementById("btn-ask");
+  var eventLogDateInput = document.getElementById("event-log-date-input");
+  var eventLogTodayBtn = document.getElementById("event-log-today-btn");
+
   var driverDetailPanel = document.getElementById("driver-detail-panel");
   var driverDetailAvatar = document.getElementById("driver-detail-avatar");
   var driverDetailName = document.getElementById("driver-detail-name");
@@ -623,33 +632,42 @@
     setMode("route-stops");
   }
 
-  function finalizeRoute() {
-    if (!warehouseId) { alert("Primero fija el almacén."); return; }
-    if (routeDraftStops.length === 0) { alert("Selecciona al menos una parada."); return; }
-
-    var peakOn = peakToggle.checked;
+  function computeRoute(startId, stopIds, peakOn) {
     var weightFn = effectiveWeightFn(peakOn);
-    var nodesOfInterest = [warehouseId].concat(routeDraftStops);
+    var nodesOfInterest = [startId].concat(stopIds);
     var distMaps = {};
     nodesOfInterest.forEach(function (id) { distMaps[id] = dijkstra(id, weightFn); });
 
-    var result = findOptimalOrder(warehouseId, routeDraftStops, distMaps);
-    if (!result) {
-      alert("No hay camino posible entre el almacén y las paradas elegidas (revisa las calles bloqueadas).");
-      return;
-    }
+    var result = findOptimalOrder(startId, stopIds, distMaps);
+    if (!result) return null; // sin camino posible (calles bloqueadas)
 
-    var hops = buildHops(warehouseId, result.order, distMaps, peakOn);
-    var nodePath = [warehouseId];
+    var hops = buildHops(startId, result.order, distMaps, peakOn);
+    var nodePath = [startId];
     hops.forEach(function (h) { nodePath.push(h.to); });
     var polyline = pathToLatLngs(nodePath);
     var distance_m = hops.reduce(function (s, h) { return s + h.distance_m; }, 0);
     var time_s = hops.reduce(function (s, h) { return s + h.time_s; }, 0);
 
-    currentRouteDraft = {
+    return {
       stops: result.order, node_path: nodePath, polyline: polyline,
       distance_m: distance_m, time_s: time_s, peak_hour: peakOn,
     };
+  }
+
+  function finalizeRoute() {
+    if (!warehouseId) { alert("Primero fija el almacén."); return; }
+    if (routeDraftStops.length === 0) { alert("Selecciona al menos una parada."); return; }
+
+    var peakOn = peakToggle.checked;
+    currentRouteDraft = computeRoute(warehouseId, routeDraftStops, peakOn);
+    if (!currentRouteDraft) {
+      alert("No hay camino posible entre el almacén y las paradas elegidas (revisa las calles bloqueadas).");
+      return;
+    }
+    var result = { order: currentRouteDraft.stops };
+    var distance_m = currentRouteDraft.distance_m;
+    var time_s = currentRouteDraft.time_s;
+    var polyline = currentRouteDraft.polyline;
 
     var orderNames = [nodesById[warehouseId].name].concat(result.order.map(function (id) { return nodesById[id].name; }));
     var algoNote = routeDraftStops.length > PERMUTATION_LIMIT
@@ -700,6 +718,80 @@
       setMode("none");
     }).catch(function () { alert("No se pudo conectar con el backend (¿está corriendo en :5000?)."); });
   }
+
+  // ---------- bot de IA ----------
+
+  function openChat() { chatWidget.classList.add("open"); askInput.focus(); }
+  function closeChat() { chatWidget.classList.remove("open"); }
+  chatToggleBtn.addEventListener("click", function () {
+    chatWidget.classList.contains("open") ? closeChat() : openChat();
+  });
+  chatMinimizeBtn.addEventListener("click", closeChat);
+
+  function addChatMessage(text, extraClass) {
+    var div = document.createElement("div");
+    div.className = "chat-msg " + extraClass;
+    div.textContent = text;
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return div;
+  }
+
+  function setChatBotMessage(el, text, kind) {
+    el.textContent = text;
+    el.className = "chat-msg chat-msg-bot" + (kind === "error" ? " chat-msg-error" : kind === "status" ? " chat-msg-status" : "");
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function askManagerBot() {
+    var query = askInput.value.trim();
+    if (!query) return;
+
+    addChatMessage(query, "chat-msg-user");
+    askInput.value = "";
+    btnAsk.disabled = true;
+    var botMsg = addChatMessage("Pensando…", "chat-msg-bot chat-msg-status");
+
+    api("POST", "/manager/chat/parse", { query: query }).then(function (parsed) {
+      if (!parsed.ok) { setChatBotMessage(botMsg, parsed.data.error || "No entendí el pedido.", "error"); return null; }
+
+      if (parsed.data.intent === "otro") {
+        setChatBotMessage(botMsg, "Por ahora puedo decirte tiempos de viaje o enviar choferes a hacer una entrega. ¿Podrías reformular tu pedido?", "answer");
+        return null;
+      }
+
+      if (parsed.data.intent === "consulta_tiempo") {
+        var d = parsed.data;
+        var route = computeRoute(d.origen_id, [d.destino_id], peakToggle.checked);
+        if (!route) { setChatBotMessage(botMsg, "No hay camino posible entre esos nodos (revisa las calles bloqueadas).", "error"); return null; }
+        var resumen = "Desde " + d.origen_nombre + " hasta " + d.destino_nombre + ": " + fmtMeters(route.distance_m) + ", " + fmtDuration(route.time_s) + ".";
+        return api("POST", "/manager/chat/confirm", { query: query, resumen: resumen });
+      }
+
+      // despacho
+      var dd = parsed.data;
+      var route2 = computeRoute(dd.warehouse_id, dd.paradas_ids, peakToggle.checked);
+      if (!route2) { setChatBotMessage(botMsg, "No hay camino posible hacia esas paradas (revisa las calles bloqueadas).", "error"); return null; }
+      currentRouteDraft = route2;
+      assignRoute(dd.chofer_id); // reusa el flujo real: persiste, arranca simulación, log, toast
+      var orderNames = route2.stops.map(function (id) { return nodesById[id].name; });
+      var resumen2 = "Envío asignado a " + dd.chofer_nombre + ". Orden: " + orderNames.join(" → ") + ". " + fmtMeters(route2.distance_m) + ", " + fmtDuration(route2.time_s) + ".";
+      return api("POST", "/manager/chat/confirm", { query: query, resumen: resumen2 });
+    }).then(function (confirmResult) {
+      if (!confirmResult) return;
+      if (!confirmResult.ok) { setChatBotMessage(botMsg, confirmResult.data.error || "No se pudo generar la respuesta.", "error"); return; }
+      setChatBotMessage(botMsg, confirmResult.data.respuesta, "answer");
+    }).catch(function () {
+      setChatBotMessage(botMsg, "No se pudo conectar con el backend (¿está corriendo en :5000?).", "error");
+    }).finally(function () {
+      btnAsk.disabled = false;
+    });
+  }
+
+  btnAsk.addEventListener("click", askManagerBot);
+  askInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") askManagerBot();
+  });
 
   // ---------- choferes ----------
 
@@ -1152,10 +1244,28 @@
     if (driverDetailInterval) { clearInterval(driverDetailInterval); driverDetailInterval = null; }
   }
 
+  function pad2(n) { return n < 10 ? "0" + n : "" + n; }
+
   function fmtLogTimestamp(iso) {
     var d = new Date(iso);
-    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
-    return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+    return pad2(d.getDate()) + "/" + pad2(d.getMonth() + 1) + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+
+  function localDateStr(d) {
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+  }
+
+  function isSameLocalDay(iso, dateStr) {
+    return localDateStr(new Date(iso)) === dateStr;
+  }
+
+  // Rango [00:00, 24:00) del día local `dateStr`, expresado en ISO UTC para que
+  // el backend pueda filtrar con una simple comparación de strings sobre `ts`.
+  function dayRangeUtcIso(dateStr) {
+    var parts = dateStr.split("-").map(Number);
+    var start = new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0);
+    var end = new Date(parts[0], parts[1] - 1, parts[2] + 1, 0, 0, 0, 0);
+    return { from: start.toISOString(), to: end.toISOString() };
   }
 
   function appendLogEntry(entry) {
@@ -1170,10 +1280,31 @@
     eventLogBody.scrollTop = eventLogBody.scrollHeight;
   }
 
+  var currentLogDate = localDateStr(new Date());
+
+  function loadLogForDate(dateStr) {
+    currentLogDate = dateStr;
+    var range = dayRangeUtcIso(dateStr);
+    eventLogBody.innerHTML = "";
+    api("GET", "/manager/log?from=" + encodeURIComponent(range.from) + "&to=" + encodeURIComponent(range.to)).then(function (r) {
+      if (!r.ok) return;
+      r.data.forEach(appendLogEntry);
+    });
+  }
+
+  eventLogDateInput.addEventListener("change", function () {
+    if (eventLogDateInput.value) loadLogForDate(eventLogDateInput.value);
+  });
+  eventLogTodayBtn.addEventListener("click", function () {
+    var today = localDateStr(new Date());
+    eventLogDateInput.value = today;
+    loadLogForDate(today);
+  });
+
   function logEvent(icon, message) {
     api("POST", "/manager/log", { icon: icon, message: message }).then(function (r) {
       if (!r.ok) return;
-      appendLogEntry(r.data);
+      if (isSameLocalDay(r.data.ts, currentLogDate)) appendLogEntry(r.data);
     });
   }
 
@@ -1181,10 +1312,8 @@
 
   function registerLocalDriver(d) { drivers.push(d); }
 
-  api("GET", "/manager/log").then(function (r) {
-    if (!r.ok) return;
-    r.data.forEach(appendLogEntry);
-  });
+  eventLogDateInput.value = currentLogDate;
+  loadLogForDate(currentLogDate);
 
   api("GET", "/manager/state").then(function (r) {
     var state = r.data;

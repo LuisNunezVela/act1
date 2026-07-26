@@ -8,7 +8,7 @@
   integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <link rel="stylesheet" href="style.css" />
 </head>
-<body>
+<body class="manager-body">
 
 <div id="map"></div>
 
@@ -137,8 +137,28 @@
 <div id="arrival-toast-stack"></div>
 
 <div id="event-log-panel">
-  <div id="event-log-header">📜 Registro de eventos</div>
+  <div id="event-log-header">
+    <span id="event-log-title">📜 Registro de eventos</span>
+    <div id="event-log-controls">
+      <input type="date" id="event-log-date-input" title="Filtrar por día">
+      <button id="event-log-today-btn" title="Volver a hoy" aria-label="Volver a hoy">Hoy</button>
+    </div>
+  </div>
   <div id="event-log-body"></div>
+</div>
+
+<button id="chat-toggle-btn" title="Preguntar o dar una orden al bot" aria-label="Abrir chat">🤖</button>
+
+<div id="chat-widget">
+  <div id="chat-header">
+    <span>Asistente de reparto</span>
+    <button id="chat-minimize-btn" title="Minimizar" aria-label="Minimizar chat">—</button>
+  </div>
+  <div id="chat-messages"></div>
+  <div id="chat-footer">
+    <input type="text" id="ask-input" placeholder="Ej: ¿cuánto del almacén al nodo 59? / Envía a Maria Suarez a nodo 36, 26, 14">
+    <button id="btn-ask" class="btn-primary">➤</button>
+  </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"

@@ -449,6 +449,28 @@ input[type="text"] {
   font-size: 16px;
 }
 
+/* en manager.html el rincón inferior derecho ya lo ocupan el registro de eventos y los
+   avisos de llegada, y el superior derecho el detalle de chofer/lista de choferes — se
+   reubica el bot junto al borde del panel lateral, sobre el mapa, donde queda libre */
+.manager-body #chat-toggle-btn {
+  bottom: auto;
+  top: 16px;
+  right: auto;
+  left: 352px;
+}
+
+.manager-body #chat-widget {
+  bottom: auto;
+  top: 80px;
+  right: auto;
+  left: 352px;
+  width: 380px;
+}
+
+.manager-body #chat-messages:empty::before {
+  content: "Pregúntame un tiempo de viaje o dame una orden, por ejemplo: \201C¿cuánto hay del almacén al nodo 59?\201D o \201Cenvía a Maria Suarez a nodo 36, 26 y 14\201D";
+}
+
 .dot {
   width: 11px;
   height: 11px;
@@ -774,8 +796,8 @@ code {
   bottom: 16px;
   right: 16px;
   z-index: 1050;
-  width: 340px;
-  max-height: 220px;
+  width: 600px;
+  height: 220px;
   background: rgba(15, 20, 40, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
@@ -787,6 +809,10 @@ code {
 
 #event-log-header {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 700;
@@ -795,6 +821,38 @@ code {
   color: #9fb0d8;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
+
+#event-log-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+#event-log-date-input {
+  color-scheme: dark;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: #d8def0;
+  font-size: 11px;
+  padding: 2px 4px;
+  font-family: inherit;
+}
+
+#event-log-today-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: #d8def0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+#event-log-today-btn:hover { background: rgba(255, 255, 255, 0.16); }
 
 #event-log-body {
   flex: 1;
@@ -816,6 +874,7 @@ code {
 
 @media (max-width: 640px) {
   #event-log-panel { width: calc(100vw - 32px); }
+  #event-log-header { flex-wrap: wrap; }
 }
 
 /* --- panel de detalle del chofer (click en el camión 🚚) --- */
