@@ -3,3 +3,4 @@ backend/.venv
 backend/__pycache__/
 .env
 data/manager_state.db
+data/driver_photos/

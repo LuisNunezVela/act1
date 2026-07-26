@@ -68,23 +68,6 @@
     <label><input type="checkbox" id="peak-toggle"> Modo hora pico (ruta óptima por tiempo, evita nodos con tráfico alto)</label>
   </div>
 
-  <hr>
-
-  <div class="field-group">
-    <input type="text" id="driver-name-input" placeholder="Nombre del chofer">
-    <button id="btn-add-driver" class="btn-primary">Agregar</button>
-  </div>
-
-  <div id="node-list-wrap">
-    <label>Choferes</label>
-    <div id="driver-list"></div>
-  </div>
-
-  <div class="legend">
-    <div class="legend-item"><span class="dot dot-idle"></span> Chofer inactivo</div>
-    <div class="legend-item"><span class="dot dot-enroute"></span> Chofer en ruta</div>
-  </div>
-
   <div class="legend">
     <div class="legend-item"><span class="dot dot-unvisited"></span> Sin nivel de tráfico</div>
     <div class="legend-item"><span class="dot dot-visited"></span> Tráfico bajo</div>
@@ -99,6 +82,27 @@
   <a href="editor.html">✏️ Editor</a>
   <a href="manager.html" class="active">🚚 Reparto</a>
 </div>
+</div>
+
+<button id="drivers-toggle-btn" title="Choferes" aria-label="Abrir choferes">👤 Choferes</button>
+
+<div id="drivers-drawer">
+  <div id="drivers-header">
+    <span>Choferes</span>
+    <button id="drivers-minimize-btn" title="Cerrar" aria-label="Cerrar choferes">—</button>
+  </div>
+  <div id="drivers-body">
+    <div class="field-group">
+      <input type="text" id="driver-name-input" placeholder="Nombre del chofer">
+      <button id="btn-add-driver" class="btn-primary">Agregar</button>
+    </div>
+    <div id="driver-list"></div>
+    <div class="legend">
+      <div class="legend-item"><span class="dot dot-idle"></span> Inactivo</div>
+      <div class="legend-item"><span class="dot dot-enroute"></span> En ruta</div>
+    </div>
+    <input type="file" id="driver-photo-input" accept="image/*" style="display:none;">
+  </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"

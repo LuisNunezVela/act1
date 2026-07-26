@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -51,6 +51,10 @@ for _edge in json.loads(DATA_PATH.read_text(encoding="utf-8"))["edges"]:
     EDGE_PAIRS.add(frozenset({_edge["source"], _edge["target"]}))
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "manager_state.db"
+
+PHOTOS_DIR = Path(__file__).resolve().parent.parent / "data" / "driver_photos"
+PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+ALLOWED_PHOTO_EXT = {"png", "jpg", "jpeg", "gif", "webp"}
 
 
 def get_db() -> sqlite3.Connection:
@@ -87,6 +91,9 @@ def init_db() -> None:
         );
         """
     )
+    driver_cols = {row["name"] for row in conn.execute("PRAGMA table_info(drivers)").fetchall()}
+    if "photo_filename" not in driver_cols:
+        conn.execute("ALTER TABLE drivers ADD COLUMN photo_filename TEXT")
     conn.commit()
     conn.close()
 
@@ -213,10 +220,14 @@ def responder():
 TRAFFIC_LEVELS = {"bajo", "medio", "alto"}
 
 
+def photo_url_for(filename) -> str | None:
+    return f"/manager/photos/{filename}" if filename else None
+
+
 def load_manager_state() -> dict:
     conn = get_db()
     warehouse_row = conn.execute("SELECT node_id FROM warehouse WHERE id = 1").fetchone()
-    driver_rows = conn.execute("SELECT id, name, status, route_json, assigned_at FROM drivers").fetchall()
+    driver_rows = conn.execute("SELECT id, name, status, route_json, assigned_at, photo_filename FROM drivers").fetchall()
     traffic_rows = conn.execute("SELECT node_id, level FROM node_traffic").fetchall()
     blocked_rows = conn.execute("SELECT node_a, node_b, reason, blocked_at FROM blocked_edges").fetchall()
     conn.close()
@@ -224,12 +235,18 @@ def load_manager_state() -> dict:
     drivers = []
     for row in driver_rows:
         route = json.loads(row["route_json"]) if row["route_json"] else None
+        if route is not None:
+            # la columna assigned_at de drivers es la fuente de verdad: siempre está
+            # bien sincronizada, a diferencia de la copia embebida en route_json
+            # (rutas asignadas antes de este fix se guardaron sin ese campo)
+            route["assigned_at"] = row["assigned_at"]
         drivers.append({
             "id": row["id"],
             "name": row["name"],
             "status": row["status"],
             "route": route,
             "assigned_at": row["assigned_at"],
+            "photo_url": photo_url_for(row["photo_filename"]),
         })
 
     return {
@@ -269,7 +286,7 @@ def manager_add_driver():
     if not name:
         return jsonify(error="El nombre del chofer no puede estar vacío."), 400
 
-    driver = {"id": uuid.uuid4().hex[:8], "name": name, "status": "idle", "route": None, "assigned_at": None}
+    driver = {"id": uuid.uuid4().hex[:8], "name": name, "status": "idle", "route": None, "assigned_at": None, "photo_url": None}
     conn = get_db()
     conn.execute("INSERT INTO drivers (id, name, status, route_json, assigned_at) VALUES (?, ?, 'idle', NULL, NULL)",
                  (driver["id"], name))
@@ -310,6 +327,7 @@ def manager_assign_route(driver_id):
         conn.close()
         return jsonify(error="El chofer ya tiene una ruta asignada."), 409
 
+    assigned_at = datetime.now(timezone.utc).isoformat()
     route = {
         "stops": body["stops"],
         "node_path": body["node_path"],
@@ -317,15 +335,14 @@ def manager_assign_route(driver_id):
         "distance_m": body["distance_m"],
         "time_s": body["time_s"],
         "peak_hour": bool(body.get("peak_hour", False)),
+        "assigned_at": assigned_at,
     }
-    assigned_at = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "UPDATE drivers SET status = 'en_ruta', route_json = ?, assigned_at = ? WHERE id = ?",
         (json.dumps(route, ensure_ascii=False), assigned_at, driver_id),
     )
     conn.commit()
     conn.close()
-    route["assigned_at"] = assigned_at
     return jsonify({"id": driver_id, "status": "en_ruta", "route": route})
 
 
@@ -404,6 +421,36 @@ def manager_unblock_edge(node_a, node_b):
         {"node_a": r["node_a"], "node_b": r["node_b"], "reason": r["reason"], "blocked_at": r["blocked_at"]}
         for r in blocked_rows
     ])
+
+
+@app.route("/manager/drivers/<driver_id>/photo", methods=["POST"])
+def manager_upload_driver_photo(driver_id):
+    conn = get_db()
+    row = conn.execute("SELECT id, photo_filename FROM drivers WHERE id = ?", (driver_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return jsonify(error="Chofer no encontrado."), 404
+
+    file = request.files.get("photo")
+    if file is None or not file.filename:
+        conn.close()
+        return jsonify(error="No se recibió ninguna imagen."), 400
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_PHOTO_EXT:
+        conn.close()
+        return jsonify(error="Formato de imagen no permitido (usa png, jpg, jpeg, gif o webp)."), 400
+
+    filename = f"{driver_id}.{ext}"
+    file.save(PHOTOS_DIR / filename)
+    conn.execute("UPDATE drivers SET photo_filename = ? WHERE id = ?", (filename, driver_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"id": driver_id, "photo_url": photo_url_for(filename)})
+
+
+@app.route("/manager/photos/<path:filename>", methods=["GET"])
+def manager_get_photo(filename):
+    return send_from_directory(PHOTOS_DIR, filename)
 
 
 if __name__ == "__main__":

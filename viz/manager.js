@@ -25,7 +25,7 @@
   var TRAFFIC_MULTIPLIER = { bajo: 1.15, medio: 1.5, alto: 2.0 };
   var AVG_SPEED_MPS = (30 * 1000) / 3600; // 30 km/h promedio urbano
   var SIM_TICK_MS = 100;
-  var SIM_SPEED_FACTOR = 60; // 1 s real = 60 s simulados
+  var SIM_SPEED_FACTOR = 1; // 1 s real = 1 s simulado (tiempo real, para revisar que todo ande bien)
 
   // ---------- geometry helpers (duplicados de app.js, cada página es autocontenida) ----------
 
@@ -63,6 +63,27 @@
     var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
     return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  // punto a la mitad de la distancia recorrida (no solo el promedio de extremos),
+  // para que la etiqueta caiga sobre la línea incluso si la calle es curva
+  function polylineMidpoint(pts) {
+    var segLens = [], total = 0;
+    for (var i = 0; i < pts.length - 1; i++) {
+      var d = haversineMeters(pts[i], pts[i + 1]);
+      segLens.push(d);
+      total += d;
+    }
+    var half = total / 2, acc = 0;
+    for (var i = 0; i < segLens.length; i++) {
+      if (acc + segLens[i] >= half) {
+        var t = segLens[i] === 0 ? 0 : (half - acc) / segLens[i];
+        var a = pts[i], b = pts[i + 1];
+        return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      }
+      acc += segLens[i];
+    }
+    return pts[Math.floor(pts.length / 2)];
   }
 
   var edgesByPair = {};
@@ -151,7 +172,9 @@
     return result;
   }
 
-  function findOptimalOrder(startId, stopIds, distMaps) {
+  var PERMUTATION_LIMIT = 8; // 8! = 40320 combinaciones, sigue siendo instantáneo en el navegador
+
+  function bruteForceOrder(startId, stopIds, distMaps) {
     var best = null, bestCost = Infinity;
     permutations(stopIds).forEach(function (order) {
       var cost = 0, prevNode = startId, feasible = true;
@@ -164,6 +187,32 @@
       if (feasible && cost < bestCost) { bestCost = cost; best = order; }
     });
     return best ? { order: best, totalCost: bestCost } : null;
+  }
+
+  // vecino más cercano: heurística usada cuando hay más paradas de las que
+  // el orden exacto por fuerza bruta puede resolver al instante
+  function nearestNeighborOrder(startId, stopIds, distMaps) {
+    var remaining = stopIds.slice();
+    var order = [], current = startId, totalCost = 0;
+    while (remaining.length) {
+      var bestIdx = -1, bestDist = Infinity;
+      remaining.forEach(function (id, i) {
+        var d = distMaps[current].dist[id];
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      });
+      if (bestIdx === -1 || bestDist === Infinity) return null;
+      var next = remaining.splice(bestIdx, 1)[0];
+      order.push(next);
+      totalCost += bestDist;
+      current = next;
+    }
+    return { order: order, totalCost: totalCost };
+  }
+
+  function findOptimalOrder(startId, stopIds, distMaps) {
+    return stopIds.length <= PERMUTATION_LIMIT
+      ? bruteForceOrder(startId, stopIds, distMaps)
+      : nearestNeighborOrder(startId, stopIds, distMaps);
   }
 
   function buildHops(startId, order, distMaps, peakOn) {
@@ -203,7 +252,31 @@
 
   // ---------- mapa ----------
 
-  var map = L.map("map", { zoomControl: true }).setView([GRAPH_DATA.center.lat, GRAPH_DATA.center.lon], 13);
+  // recuerda posición/zoom entre recargas (localStorage, por navegador) para que
+  // un refresh no vuelva a mostrar todo Santa Cruz si el usuario estaba haciendo zoom
+  var VIEW_STORAGE_KEY = "rutacruz_manager_view";
+
+  function loadSavedView() {
+    try {
+      var raw = localStorage.getItem(VIEW_STORAGE_KEY);
+      if (!raw) return null;
+      var v = JSON.parse(raw);
+      if (v && typeof v.lat === "number" && typeof v.lon === "number" && typeof v.zoom === "number") return v;
+    } catch (e) { /* localStorage corrupto o inaccesible: usar la vista por defecto */ }
+    return null;
+  }
+
+  function saveView() {
+    var center = map.getCenter();
+    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({ lat: center.lat, lon: center.lng, zoom: map.getZoom() }));
+  }
+
+  var savedView = loadSavedView();
+  var initialCenter = savedView ? [savedView.lat, savedView.lon] : [GRAPH_DATA.center.lat, GRAPH_DATA.center.lon];
+  var initialZoom = savedView ? savedView.zoom : 13;
+
+  var map = L.map("map", { zoomControl: true }).setView(initialCenter, initialZoom);
+  map.on("moveend zoomend", saveView);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap contributors",
@@ -216,6 +289,40 @@
     var line = L.polyline(pts, { color: COLORS.edgeDefault, weight: 2, opacity: 0.55 }).addTo(edgeLayer);
     edgeLineByPair[canonicalKey(e.source, e.target)] = line;
   });
+
+  // --- etiquetas de distancia/tiempo por calle (igual que en demo.html, + tiempo estimado) ---
+  var edgeLabelLayer = L.layerGroup().addTo(map);
+  var edgeLabelByPair = {};
+
+  function fmtShortDuration(s) {
+    return s < 60 ? Math.round(s) + " s" : Math.round(s / 60) + " min";
+  }
+
+  function edgeLabelText(edge, peakOn) {
+    return (edge.weight / 1000).toFixed(2) + " km · " + fmtShortDuration(edgeTimeSeconds(edge, peakOn));
+  }
+
+  function renderEdgeLabels(peakOn) {
+    GRAPH_DATA.edges.forEach(function (e) {
+      var mid = polylineMidpoint(pointsBetween(e.source, e.target));
+      var marker = L.marker(mid, {
+        icon: L.divIcon({ className: "edge-label", html: edgeLabelText(e, peakOn), iconSize: null }),
+        interactive: false,
+        keyboard: false,
+      }).addTo(edgeLabelLayer);
+      edgeLabelByPair[canonicalKey(e.source, e.target)] = marker;
+    });
+  }
+
+  function refreshEdgeLabels() {
+    var peakOn = peakToggle.checked;
+    GRAPH_DATA.edges.forEach(function (e) {
+      var marker = edgeLabelByPair[canonicalKey(e.source, e.target)];
+      if (marker) marker.setIcon(L.divIcon({ className: "edge-label", html: edgeLabelText(e, peakOn), iconSize: null }));
+    });
+  }
+
+  renderEdgeLabels(false);
 
   var routeDraftLayer = L.layerGroup().addTo(map);
 
@@ -273,8 +380,15 @@
   var routeSummaryBody = document.getElementById("route-summary-body");
   var driverSelect = document.getElementById("driver-select");
   var peakToggle = document.getElementById("peak-toggle");
+  peakToggle.addEventListener("change", refreshEdgeLabels);
   var driverList = document.getElementById("driver-list");
   var driverNameInput = document.getElementById("driver-name-input");
+
+  var driversToggleBtn = document.getElementById("drivers-toggle-btn");
+  var driversDrawer = document.getElementById("drivers-drawer");
+  var driversMinimizeBtn = document.getElementById("drivers-minimize-btn");
+  driversToggleBtn.addEventListener("click", function () { driversDrawer.classList.toggle("open"); });
+  driversMinimizeBtn.addEventListener("click", function () { driversDrawer.classList.remove("open"); });
 
   function setMode(newMode) {
     mode = newMode;
@@ -287,7 +401,7 @@
     else if (mode === "set-almacen") updateStatus("Click en un nodo del mapa para fijarlo como almacén.");
     else if (mode === "set-traffic") updateStatus("Click en un nodo para asignarle un nivel de tráfico.");
     else if (mode === "block-edge") updateStatus("Click en dos nodos conectados por una calle para bloquearla (click en el mismo nodo cancela).");
-    else if (mode === "route-stops") updateStatus("Click en hasta 5 nodos para las paradas (" + routeDraftStops.length + "/5).");
+    else if (mode === "route-stops") updateStatus("Click en los nodos que quieras visitar como paradas (" + routeDraftStops.length + " seleccionada" + (routeDraftStops.length === 1 ? "" : "s") + ").");
   }
   modeButtons.forEach(function (btn) {
     btn.addEventListener("click", function () { setMode(btn.dataset.mode); });
@@ -342,6 +456,7 @@
         if (!r.ok) { alert(r.data.error || "No se pudo actualizar el tráfico."); return; }
         trafficByNode = r.data;
         refreshNodeStyle(trafficSelectNodeId);
+        refreshEdgeLabels();
       }).catch(function () { alert("No se pudo conectar con el backend (¿está corriendo en :5000?)."); });
     });
   });
@@ -451,7 +566,6 @@
     if (idx !== -1) {
       routeDraftStops.splice(idx, 1);
     } else {
-      if (routeDraftStops.length >= 5) { alert("Máximo 5 paradas por ruta."); return; }
       routeDraftStops.push(id);
     }
     renderRouteDraftChips();
@@ -514,10 +628,13 @@
     };
 
     var orderNames = [nodesById[warehouseId].name].concat(result.order.map(function (id) { return nodesById[id].name; }));
+    var algoNote = routeDraftStops.length > PERMUTATION_LIMIT
+      ? " Con más de " + PERMUTATION_LIMIT + " paradas se usa una heurística (vecino más cercano) en vez del orden exacto."
+      : "";
     routeSummaryBody.innerHTML =
       "<p><strong>Orden:</strong> " + orderNames.join(" → ") + "</p>" +
       "<p><strong>Distancia:</strong> " + fmtMeters(distance_m) + " &middot; <strong>Tiempo estimado:</strong> " + fmtDuration(time_s) + "</p>" +
-      "<p class=\"hint\">El orden se optimiza por distancia; con hora pico activada se optimiza por tiempo (puede rodear nodos con tráfico alto y siempre evita calles bloqueadas).</p>";
+      "<p class=\"hint\">El orden se optimiza por distancia; con hora pico activada se optimiza por tiempo (puede rodear nodos con tráfico alto y siempre evita calles bloqueadas)." + algoNote + "</p>";
 
     driverSelect.innerHTML = "";
     var idleDrivers = drivers.filter(function (d) { return d.status === "idle"; });
@@ -543,8 +660,8 @@
   function assignRoute(driverId) {
     api("POST", "/manager/drivers/" + driverId + "/assign", currentRouteDraft).then(function (r) {
       if (!r.ok) { alert(r.data.error || "No se pudo asignar la ruta."); return; }
-      updateLocalDriver(r.data);
-      startDriverSimulation(r.data);
+      var merged = updateLocalDriver(r.data);
+      startDriverSimulation(merged);
       routeDraftStops = [];
       currentRouteDraft = null;
       renderRouteDraftChips();
@@ -557,17 +674,37 @@
 
   // ---------- choferes ----------
 
+  var photoUploadDriverId = null;
+  var driverPhotoInput = document.getElementById("driver-photo-input");
+
   function refreshDriverList() {
     driverList.innerHTML = "";
     drivers.forEach(function (d) {
       var row = document.createElement("div");
       row.className = "node-list-item";
+
+      var avatar = document.createElement("div");
+      avatar.className = "driver-avatar";
+      avatar.title = "Click para cambiar la foto";
+      if (d.photo_url) {
+        avatar.style.backgroundImage = "url('" + BACKEND + d.photo_url + "')";
+      } else {
+        avatar.textContent = "👤";
+      }
+      avatar.addEventListener("click", function () {
+        photoUploadDriverId = d.id;
+        driverPhotoInput.click();
+      });
+      row.appendChild(avatar);
+
       var label = document.createElement("span");
+      label.className = "driver-label";
       var dot = document.createElement("span");
       dot.className = "dot " + (d.status === "en_ruta" ? "dot-enroute" : "dot-idle");
       label.appendChild(dot);
       label.appendChild(document.createTextNode(" " + d.name + " — " + (d.status === "en_ruta" ? "En ruta" : "Inactivo")));
       row.appendChild(label);
+
       if (d.status === "idle") {
         var btn = document.createElement("button");
         btn.className = "btn-secondary";
@@ -580,10 +717,27 @@
     });
   }
 
+  driverPhotoInput.addEventListener("change", function () {
+    var file = driverPhotoInput.files[0];
+    driverPhotoInput.value = "";
+    if (!file || !photoUploadDriverId) return;
+    var driverId = photoUploadDriverId;
+    var formData = new FormData();
+    formData.append("photo", file);
+    fetch(BACKEND + "/manager/drivers/" + driverId + "/photo", { method: "POST", body: formData })
+      .then(function (res) { return res.json().then(function (data) { return { ok: res.ok, data: data }; }); })
+      .then(function (r) {
+        if (!r.ok) { alert(r.data.error || "No se pudo subir la foto."); return; }
+        updateLocalDriver(r.data);
+      })
+      .catch(function () { alert("No se pudo conectar con el backend (¿está corriendo en :5000?)."); });
+  });
+
   function updateLocalDriver(updated) {
     var idx = drivers.findIndex(function (d) { return d.id === updated.id; });
     if (idx !== -1) drivers[idx] = Object.assign({}, drivers[idx], updated);
     refreshDriverList();
+    return idx !== -1 ? drivers[idx] : updated;
   }
 
   document.getElementById("btn-add-driver").addEventListener("click", function () {
@@ -624,6 +778,20 @@
     return points[points.length - 1];
   }
 
+  function positionAtElapsed(hops, hopBounds, elapsed) {
+    var b = hopBounds.filter(function (hb) { return elapsed >= hb.start && elapsed < hb.end; })[0];
+    if (!b) {
+      var lastHop = hops[hops.length - 1];
+      return lastHop.points[lastHop.points.length - 1];
+    }
+    var t = b.hop.time_s === 0 ? 0 : (elapsed - b.start) / b.hop.time_s;
+    return pointAtDistanceWithinHop(b.hop.points, t * b.hop.distance_m);
+  }
+
+  // driver.route.assigned_at permite RETOMAR una simulación en curso (por ejemplo,
+  // tras recargar la página) desde el tiempo real transcurrido en vez de reiniciarla
+  // desde el almacén — así una recarga externa (o volver a abrir la pestaña) no hace
+  // que el camión "salte" hacia atrás en su recorrido
   function startDriverSimulation(driver) {
     if (driverTimers[driver.id]) { clearInterval(driverTimers[driver.id]); delete driverTimers[driver.id]; }
     var peakOn = driver.route.peak_hour;
@@ -636,14 +804,24 @@
       return { start: start, end: cumTime, hop: h };
     });
     var totalTime = cumTime;
+
     var elapsed = 0;
+    if (driver.route.assigned_at) {
+      var realElapsedSeconds = (Date.now() - new Date(driver.route.assigned_at).getTime()) / 1000;
+      elapsed = Math.max(0, realElapsedSeconds * SIM_SPEED_FACTOR);
+    }
 
     if (driverMarkers[driver.id]) map.removeLayer(driverMarkers[driver.id]);
-    var marker = L.marker(hops[0].points[0], {
+    var marker = L.marker(positionAtElapsed(hops, hopBounds, elapsed), {
       icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }),
     }).addTo(map);
     marker.bindTooltip(driver.name, { direction: "top", offset: [0, -10] });
     driverMarkers[driver.id] = marker;
+
+    if (elapsed >= totalTime) {
+      onSimulationComplete(driver);
+      return;
+    }
 
     driverTimers[driver.id] = setInterval(function () {
       elapsed += (SIM_TICK_MS / 1000) * SIM_SPEED_FACTOR;
@@ -655,11 +833,7 @@
         onSimulationComplete(driver);
         return;
       }
-      var b = hopBounds.filter(function (hb) { return elapsed >= hb.start && elapsed < hb.end; })[0];
-      if (!b) return;
-      var t = b.hop.time_s === 0 ? 0 : (elapsed - b.start) / b.hop.time_s;
-      var targetDist = t * b.hop.distance_m;
-      marker.setLatLng(pointAtDistanceWithinHop(b.hop.points, targetDist));
+      marker.setLatLng(positionAtElapsed(hops, hopBounds, elapsed));
     }, SIM_TICK_MS);
   }
 
@@ -698,6 +872,7 @@
     get trafficByNode() { return trafficByNode; },
     get blockedPairs() { return blockedPairs; },
     get mode() { return mode; },
+    get routeDraftStops() { return routeDraftStops; },
     dijkstra: dijkstra,
     GRAPH_DATA: GRAPH_DATA,
     map: map,
