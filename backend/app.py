@@ -16,6 +16,10 @@ redacta la respuesta conversacional con los números que le pasa el frontend.
 import re
 import json
 import sqlite3
+import unicodedata
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -112,14 +116,149 @@ def canonical_pair(a: str, b: str) -> tuple[str, str]:
     return (a, b) if a < b else (b, a)
 
 
+WEATHER_CODES = {
+    0: "despejado", 1: "mayormente despejado", 2: "parcialmente nublado", 3: "nublado",
+    45: "con niebla", 48: "con niebla helada",
+    51: "con llovizna ligera", 53: "con llovizna moderada", 55: "con llovizna densa",
+    56: "con llovizna helada", 57: "con llovizna helada densa",
+    61: "con lluvia ligera", 63: "con lluvia moderada", 65: "con lluvia fuerte",
+    66: "con lluvia helada", 67: "con lluvia helada fuerte",
+    71: "con nieve ligera", 73: "con nieve moderada", 75: "con nieve fuerte", 77: "con nieve granulada",
+    80: "con chubascos ligeros", 81: "con chubascos moderados", 82: "con chubascos fuertes",
+    85: "con chubascos de nieve ligeros", 86: "con chubascos de nieve fuertes",
+    95: "con tormenta eléctrica", 96: "con tormenta y granizo ligero", 99: "con tormenta y granizo fuerte",
+}
+DAY_NAMES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+
+
+def weather_description(code) -> str:
+    return WEATHER_CODES.get(code, "condición desconocida")
+
+
+def _geocode_query(query_str: str, count: int = 5) -> list:
+    url = "https://geocoding-api.open-meteo.com/v1/search?" + urllib.parse.urlencode(
+        {"name": query_str, "count": count, "language": "es"}
+    )
+    with urllib.request.urlopen(url, timeout=8) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return data.get("results") or []
+
+
+def _format_place(r: dict):
+    label = r["name"]
+    if r.get("admin1"):
+        label += ", " + r["admin1"]
+    if r.get("country"):
+        label += ", " + r["country"]
+    return r["latitude"], r["longitude"], label
+
+
+def geocode_place(name: str, bias_country: str | None = None):
+    # EasyRoute opera en Bolivia: para lugares ambiguos ("La Paz" también existe en México,
+    # Honduras, Argentina...) se prefiere la coincidencia del país de sesgo entre los primeros
+    # resultados, en vez de asumir que el primer resultado global es el correcto.
+    results = _geocode_query(name)
+    if not results:
+        return None
+    if bias_country:
+        for r in results:
+            if (r.get("country") or "").lower() == bias_country.lower():
+                return _format_place(r)
+    return _format_place(results[0])
+
+
+def fetch_weather(lat: float, lon: float) -> dict:
+    url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "current": "temperature_2m,precipitation,weather_code",
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+            "timezone": "auto",
+            "forecast_days": 7,
+        }
+    )
+    with urllib.request.urlopen(url, timeout=8) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def build_weather_resumen(place_label: str, weather: dict) -> str:
+    current = weather.get("current", {})
+    daily = weather.get("daily", {})
+    parts = [
+        "Lugar: " + place_label + ".",
+        "Ahora: " + str(current.get("temperature_2m")) + "°C, "
+        + weather_description(current.get("weather_code")) + ".",
+    ]
+    dates = daily.get("time", [])
+    tmax = daily.get("temperature_2m_max", [])
+    tmin = daily.get("temperature_2m_min", [])
+    pprob = daily.get("precipitation_probability_max", [])
+    codes = daily.get("weather_code", [])
+    days = []
+    for i, date_str in enumerate(dates):
+        try:
+            label = DAY_NAMES[datetime.strptime(date_str, "%Y-%m-%d").weekday()]
+        except ValueError:
+            label = date_str
+        days.append(
+            label + ": " + str(tmin[i]) + "-" + str(tmax[i]) + "°C, "
+            + weather_description(codes[i]) + ", prob. lluvia " + str(pprob[i]) + "%"
+        )
+    parts.append("Pronóstico 7 días: " + "; ".join(days) + ".")
+    return " ".join(parts)
+
+
+def _normalize(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    return s.strip().lower()
+
+
 def resolve_driver_by_name(conn, name_query: str):
-    q = name_query.strip().lower()
+    q = _normalize(name_query)
     rows = conn.execute("SELECT id, name, status FROM drivers").fetchall()
     for r in rows:
-        if r["name"].strip().lower() == q:
+        if _normalize(r["name"]) == q:
             return r
-    candidates = [r for r in rows if q in r["name"].strip().lower() or r["name"].strip().lower() in q]
+    candidates = [r for r in rows if q in _normalize(r["name"]) or _normalize(r["name"]) in q]
     return candidates[0] if len(candidates) == 1 else None
+
+
+def resolve_node(mention: str):
+    """Resuelve un nodo por número ('59', 'nodo 59') o por coincidencia de nombre
+    ('5to Anillo y Doble Vía'). Devuelve (nodo, None) si hay una única coincidencia,
+    (None, candidatos) si es ambiguo, o (None, None) si no se encontró nada."""
+    q = mention.strip()
+    if re.fullmatch(r"\d+", q):
+        node_id = NUMBER_TO_ID.get(int(q))
+        if node_id is not None:
+            return NODES_BY_ID[node_id], None
+
+    q_norm = _normalize(q)
+    nodes = list(NODES_BY_ID.values())
+    exact = [n for n in nodes if _normalize(n["name"]) == q_norm]
+    if len(exact) == 1:
+        return exact[0], None
+
+    candidates = [n for n in nodes if q_norm in _normalize(n["name"]) or _normalize(n["name"]) in q_norm]
+    if len(candidates) == 1:
+        return candidates[0], None
+    if len(candidates) > 1:
+        return None, candidates
+    return None, None
+
+
+def respond_ambiguous_nodes(query: str, mention: str, candidates: list):
+    names = [c["name"] for c in candidates]
+    resumen = (
+        "El usuario mencionó '" + mention + "' pero hay varias coincidencias posibles: "
+        + ", ".join(names) + ". Pregúntale cuál de estas opciones es, listándolas todas."
+    )
+    try:
+        respuesta = manager_confirm_chain.invoke({"query": query, "resumen": resumen})
+    except Exception:
+        respuesta = "Hay varias coincidencias con '" + mention + "': " + ", ".join(names) + ". ¿Cuál de estas es?"
+    return jsonify(intent="aclaracion", respuesta=respuesta)
 
 
 class RouteQuery(BaseModel):
@@ -168,24 +307,35 @@ explain_prompt = ChatPromptTemplate.from_messages(
 )
 
 class ManagerIntent(BaseModel):
-    intent: Literal["consulta_tiempo", "despacho", "otro"] = Field(
+    intent: Literal["consulta_tiempo", "despacho", "clima", "otro"] = Field(
         description="'consulta_tiempo' si pregunta cuánto tiempo/distancia toma llegar a un "
         "nodo; 'despacho' si pide enviar/asignar a un chofer a hacer una entrega en una o más "
-        "paradas; 'otro' si no corresponde a ninguno de los anteriores."
+        "paradas; 'clima' si pregunta por el clima, temperatura, lluvia o pronóstico de algún "
+        "lugar; 'otro' si no corresponde a ninguno de los anteriores."
     )
-    origen_numero: int | None = Field(
+    origen_lugar: str | None = Field(
         None,
-        description="Número de nodo de origen si se menciona explícitamente. Si la pregunta "
-        "dice 'desde el almacén'/'depósito' o no menciona origen, deja este campo null.",
+        description="Nodo de origen mencionado explícitamente (puede ser un número, "
+        "'nodo N', o el nombre de una intersección/lugar, ej. '5to Anillo y Doble Vía'). "
+        "Si la pregunta dice 'desde el almacén'/'depósito' o no menciona origen, deja null.",
     )
-    destino_numero: int | None = Field(
-        None, description="Número de nodo destino, solo para intent='consulta_tiempo'."
+    destino_lugar: str | None = Field(
+        None,
+        description="Nodo destino mencionado (número o nombre de lugar/intersección), "
+        "solo para intent='consulta_tiempo'.",
     )
     chofer_nombre: str | None = Field(
         None, description="Nombre del chofer mencionado, solo para intent='despacho'."
     )
-    paradas_numeros: list[int] = Field(
-        default_factory=list, description="Números de nodo a visitar, solo para intent='despacho'."
+    paradas_lugares: list[str] = Field(
+        default_factory=list,
+        description="Paradas a visitar (cada una: número o nombre de lugar/intersección), "
+        "solo para intent='despacho'.",
+    )
+    lugar: str | None = Field(
+        None,
+        description="Lugar mencionado (ciudad/zona) para intent='clima'. Si no mencionan "
+        "ninguno, deja este campo null.",
     )
 
 
@@ -194,10 +344,12 @@ manager_intent_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             "Interpretas pedidos en un gestor de reparto sobre un grafo vial. Los nodos se "
-            "identifican como 'nodo' seguido de un número. Clasifica el pedido como "
-            "'consulta_tiempo' (preguntan cuánto tarda/cuánto falta a un nodo), 'despacho' "
-            "(piden enviar un chofer a una o más paradas) u 'otro'. Extrae solo los números y "
-            "nombres presentes en el texto, no inventes datos.",
+            "identifican por un número ('nodo 34') o por el nombre de una intersección/lugar "
+            "('5to Anillo y Doble Vía'). Clasifica el pedido como 'consulta_tiempo' (preguntan "
+            "cuánto tarda/cuánto falta a un nodo), 'despacho' (piden enviar un chofer a una o "
+            "más paradas), 'clima' (preguntan por el clima, temperatura, lluvia o pronóstico de "
+            "algún lugar) u 'otro'. Extrae los nodos tal como los menciona el usuario (número o "
+            "nombre de lugar, sin modificarlos) y no inventes datos que no estén en el texto.",
         ),
         ("human", "{query}"),
     ]
@@ -217,7 +369,7 @@ manager_confirm_prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-llm = ChatGoogleGenerativeAI(model="gemini-flash-latest")
+llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite")
 chain = prompt | llm.with_structured_output(RouteQuery)
 explain_chain = explain_prompt | llm | StrOutputParser()
 manager_intent_chain = manager_intent_prompt | llm.with_structured_output(ManagerIntent)
@@ -304,18 +456,32 @@ def manager_chat_parse():
         warehouse_id = warehouse_row["node_id"] if warehouse_row else None
 
         if result.intent == "consulta_tiempo":
-            origen_id = NUMBER_TO_ID.get(result.origen_numero) if result.origen_numero is not None else warehouse_id
-            destino_id = NUMBER_TO_ID.get(result.destino_numero) if result.destino_numero is not None else None
+            if result.origen_lugar:
+                origen_node, origen_candidates = resolve_node(result.origen_lugar)
+                if origen_candidates:
+                    return respond_ambiguous_nodes(query, result.origen_lugar, origen_candidates)
+                if origen_node is None:
+                    return jsonify(error=f"No encontré ningún nodo que coincida con '{result.origen_lugar}'."), 404
+                origen_id = origen_node["id"]
+            else:
+                origen_id = warehouse_id
             if origen_id is None:
                 return jsonify(error="No hay un almacén fijado ni se indicó un origen válido."), 400
-            if destino_id is None:
-                return jsonify(error=f"No existe el Nodo {result.destino_numero} en el grafo."), 400
+
+            if not result.destino_lugar:
+                return jsonify(error="No entendí a qué nodo te referís."), 400
+            destino_node, destino_candidates = resolve_node(result.destino_lugar)
+            if destino_candidates:
+                return respond_ambiguous_nodes(query, result.destino_lugar, destino_candidates)
+            if destino_node is None:
+                return jsonify(error=f"No encontré ningún nodo que coincida con '{result.destino_lugar}'."), 404
+
             return jsonify(
                 intent="consulta_tiempo",
                 origen_id=origen_id,
                 origen_nombre=NODES_BY_ID[origen_id]["name"],
-                destino_id=destino_id,
-                destino_nombre=NODES_BY_ID[destino_id]["name"],
+                destino_id=destino_node["id"],
+                destino_nombre=destino_node["name"],
             )
 
         if result.intent == "despacho":
@@ -326,24 +492,48 @@ def manager_chat_parse():
                 return jsonify(error=f"No encontré un chofer llamado '{result.chofer_nombre}'."), 404
             if driver_row["status"] != "idle":
                 return jsonify(error=f"{driver_row['name']} ya está en una ruta."), 409
-            if not result.paradas_numeros:
+            if not result.paradas_lugares:
                 return jsonify(error="No entendí las paradas de la entrega."), 400
             if warehouse_id is None:
                 return jsonify(error="Primero fija el almacén."), 400
             paradas_ids = []
-            for num in result.paradas_numeros:
-                node_id = NUMBER_TO_ID.get(num)
-                if node_id is None:
-                    return jsonify(error=f"No existe el Nodo {num} en el grafo."), 400
-                paradas_ids.append(node_id)
+            paradas_nombres = []
+            for mention in result.paradas_lugares:
+                node, candidates = resolve_node(mention)
+                if candidates:
+                    return respond_ambiguous_nodes(query, mention, candidates)
+                if node is None:
+                    return jsonify(error=f"No encontré ningún nodo que coincida con '{mention}'."), 400
+                paradas_ids.append(node["id"])
+                paradas_nombres.append(node["name"])
             return jsonify(
                 intent="despacho",
                 chofer_id=driver_row["id"],
                 chofer_nombre=driver_row["name"],
                 warehouse_id=warehouse_id,
                 paradas_ids=paradas_ids,
-                paradas_nombres=[NODES_BY_ID[i]["name"] for i in paradas_ids],
+                paradas_nombres=paradas_nombres,
             )
+
+        if result.intent == "clima":
+            place = (result.lugar or "Santa Cruz de la Sierra, Bolivia").strip()
+            try:
+                geo = geocode_place(place, bias_country="Bolivia")
+            except (urllib.error.URLError, TimeoutError) as exc:
+                return jsonify(error=f"No se pudo consultar el clima: {exc}"), 502
+            if geo is None:
+                return jsonify(error=f"No encontré el lugar '{place}'."), 404
+            lat, lon, place_label = geo
+            try:
+                weather = fetch_weather(lat, lon)
+            except (urllib.error.URLError, TimeoutError) as exc:
+                return jsonify(error=f"No se pudo obtener el clima: {exc}"), 502
+            resumen = build_weather_resumen(place_label, weather)
+            try:
+                respuesta = manager_confirm_chain.invoke({"query": query, "resumen": resumen})
+            except Exception as exc:  # error de LLM
+                return jsonify(error=f"No se pudo generar la respuesta: {exc}"), 502
+            return jsonify(intent="clima", respuesta=respuesta)
 
         return jsonify(intent="otro")
     finally:

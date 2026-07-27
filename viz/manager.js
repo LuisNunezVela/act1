@@ -756,7 +756,12 @@
       if (!parsed.ok) { setChatBotMessage(botMsg, parsed.data.error || "No entendí el pedido.", "error"); return null; }
 
       if (parsed.data.intent === "otro") {
-        setChatBotMessage(botMsg, "Por ahora puedo decirte tiempos de viaje o enviar choferes a hacer una entrega. ¿Podrías reformular tu pedido?", "answer");
+        setChatBotMessage(botMsg, "Por ahora puedo decirte tiempos de viaje, el clima de un lugar, o enviar choferes a hacer una entrega. ¿Podrías reformular tu pedido?", "answer");
+        return null;
+      }
+
+      if (parsed.data.intent === "clima" || parsed.data.intent === "aclaracion") {
+        setChatBotMessage(botMsg, parsed.data.respuesta, "answer");
         return null;
       }
 

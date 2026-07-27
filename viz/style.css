@@ -468,7 +468,7 @@ input[type="text"] {
 }
 
 .manager-body #chat-messages:empty::before {
-  content: "Pregúntame un tiempo de viaje o dame una orden, por ejemplo: \201C¿cuánto hay del almacén al nodo 59?\201D o \201Cenvía a Maria Suarez a nodo 36, 26 y 14\201D";
+  content: "Pregúntame un tiempo de viaje, el clima, o dame una orden, por ejemplo: \201C¿cuánto hay del almacén al nodo 59?\201D, \201C¿va a llover hoy en Santa Cruz?\201D o \201Cenvía a Maria Suarez a nodo 36, 26 y 14\201D";
 }
 
 .dot {
