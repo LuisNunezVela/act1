@@ -19,7 +19,7 @@
     selectedBorder: "#16a34a",
     defaultBorder: "#5b6478",
     blocked: "#e5484d",
-    edgeDefault: "#9aa3b5",
+      edgeDefault: "#9aa3b5",
     trailRemaining: "#14b8a6", // var(--teal); tramo por recorrer del trail
   };
 

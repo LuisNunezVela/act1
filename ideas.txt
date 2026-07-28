@@ -1,3 +1,6 @@
+mejorar el reporte de python, hacer que genere uno, utilm opuede ser todos los viajes, promedio, etc
+
+
 es dificil marcar rutas que no se pueden usar en el mapa, estaria bueno que con solo dar cick en el nodo, se bloquee la calle y automaticamente
 calcule otra ruta rodeando la que marco el tipo, y que haya en la parte de abajo de la pantalla un btoon donde pueda dar retroceder asi deshacer los puntos ue marco.
 
