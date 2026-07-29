@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EasyRoute — Celular del chofer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body class="driver-body">
+
+<div id="map"></div>
+
+<div id="phone-topbar">
+  <select id="driver-select"></select>
+  <span id="phone-status">—</span>
+</div>
+
+<div id="phone-alert-banner"></div>
+
+<div id="phone-opacity-control">
+  <span id="phone-opacity-icon" aria-hidden="true">🗺️</span>
+  <input type="range" id="map-opacity-slider" min="20" max="100" value="100" step="5" aria-label="Opacidad del mapa">
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="graph_data.js"></script>
+<script src="driver.js"></script>
+</body>
+</html>

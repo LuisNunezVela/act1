@@ -285,11 +285,24 @@
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);
 
+  // recuerda la opacidad entre recargas, igual que la vista del mapa (VIEW_STORAGE_KEY):
+  // así un refresh (por ejemplo el auto-reload de un live server al escribirse la base de
+  // datos) no se siente como "la opacidad se resetea sola"
+  var OPACITY_STORAGE_KEY = "rutacruz_manager_opacity";
   var mapOpacitySlider = document.getElementById("map-opacity-slider");
   var mapOpacityValue = document.getElementById("map-opacity-value");
+
+  var savedOpacity = parseInt(localStorage.getItem(OPACITY_STORAGE_KEY), 10);
+  if (!isNaN(savedOpacity) && savedOpacity >= 10 && savedOpacity <= 100) {
+    mapOpacitySlider.value = savedOpacity;
+    mapOpacityValue.textContent = savedOpacity;
+    tileLayer.setOpacity(savedOpacity / 100);
+  }
+
   mapOpacitySlider.addEventListener("input", function () {
     mapOpacityValue.textContent = mapOpacitySlider.value;
     tileLayer.setOpacity(parseInt(mapOpacitySlider.value, 10) / 100);
+    localStorage.setItem(OPACITY_STORAGE_KEY, mapOpacitySlider.value);
   });
 
   var edgeLayer = L.layerGroup().addTo(map);
@@ -532,6 +545,51 @@
     refreshBlockedList();
   }
 
+  // ---------- alertas de trancadera reportadas desde el celular del chofer ----------
+
+  var alertLayer = L.layerGroup().addTo(map);
+  var alertMarkersById = {};
+
+  function buildAlertPopupHtml(a) {
+    var edgeName = nodesById[a.node_a].name + " ↔ " + nodesById[a.node_b].name;
+    return '<div class="alert-popup"><p><strong>Trancadera reportada</strong></p>' +
+      "<p>" + edgeName + "</p>" +
+      '<button class="btn-primary alert-block-btn" style="width:100%;margin-bottom:6px;">Bloquear esta calle</button>' +
+      '<button class="btn-secondary alert-dismiss-btn" style="width:100%;margin-bottom:0;">Descartar</button></div>';
+  }
+
+  function dismissAlert(alertId) {
+    api("DELETE", "/manager/alerts/" + alertId).then(function (r) {
+      if (r.ok) applyAlertsState(r.data);
+    });
+  }
+
+  function wireAlertPopupButtons(marker, a) {
+    var el = marker.getPopup().getElement();
+    el.querySelector(".alert-block-btn").addEventListener("click", function () {
+      blockEdgeRequest(a.node_a, a.node_b, "Trancadera reportada");
+      dismissAlert(a.id); // una vez bloqueada la calle, el ❗ sobre ella ya es redundante
+    });
+    el.querySelector(".alert-dismiss-btn").addEventListener("click", function () { dismissAlert(a.id); });
+  }
+
+  function applyAlertsState(alerts) {
+    var seenIds = {};
+    alerts.forEach(function (a) {
+      seenIds[a.id] = true;
+      if (alertMarkersById[a.id]) return; // ya está pintado, no recrear (evita parpadeo del popup abierto)
+      var marker = L.marker([a.lat, a.lng], {
+        icon: L.divIcon({ className: "road-alert-marker", html: "❗", iconSize: null }),
+      }).addTo(alertLayer);
+      marker.bindPopup(buildAlertPopupHtml(a));
+      marker.on("popupopen", function () { wireAlertPopupButtons(marker, a); });
+      alertMarkersById[a.id] = marker;
+    });
+    Object.keys(alertMarkersById).forEach(function (id) {
+      if (!seenIds[id]) { alertLayer.removeLayer(alertMarkersById[id]); delete alertMarkersById[id]; }
+    });
+  }
+
   function handleBlockClick(id) {
     if (blockDraftNodeA === null) {
       blockDraftNodeA = id;
@@ -708,6 +766,7 @@
       if (!r.ok) { alert(r.data.error || "No se pudo asignar la ruta."); return; }
       var merged = updateLocalDriver(r.data);
       startDriverSimulation(merged);
+      driverRouteAssignedAt[merged.id] = merged.route.assigned_at;
       logEvent("🚚", merged.name + " inició un viaje (" + fmtMeters(merged.route.distance_m) + ", " + fmtDuration(merged.route.time_s) + ")");
       routeDraftStops = [];
       currentRouteDraft = null;
@@ -831,6 +890,13 @@
       label.appendChild(document.createTextNode(" " + d.name + " — " + (d.status === "en_ruta" ? "En ruta" : "Inactivo")));
       row.appendChild(label);
 
+      var phoneBtn = document.createElement("button");
+      phoneBtn.className = "btn-secondary";
+      phoneBtn.textContent = "📱 Ver celular";
+      phoneBtn.style.marginBottom = "0";
+      phoneBtn.addEventListener("click", function () { window.open("driver.html?driver=" + d.id, "_blank"); });
+      row.appendChild(phoneBtn);
+
       if (d.status === "idle") {
         var btn = document.createElement("button");
         btn.className = "btn-secondary";
@@ -893,6 +959,7 @@
   var driverTimers = {};        // setInterval: tick de movimiento (solo mientras maneja)
   var driverArrivalTimers = {}; // setTimeout: transición pendiente (llegada o fin de descarga)
   var driverSimState = {};      // {hopBounds, tripRealSeconds, assignedAtMs, originName, destName, totalDistanceM}, para el panel de detalle
+  var driverRouteAssignedAt = {}; // {driverId: assigned_at}, para no reiniciar la animación en cada poll
 
   function clearDriverSimTimers(driverId) {
     if (driverTimers[driverId]) { clearInterval(driverTimers[driverId]); delete driverTimers[driverId]; }
@@ -930,6 +997,7 @@
     removeDriverFlag(driverId);
     removeDriverTrail(driverId);
     delete driverSimState[driverId];
+    delete driverRouteAssignedAt[driverId];
   }
 
   function pointAtDistanceWithinHop(points, targetDist) {
@@ -1313,29 +1381,53 @@
     });
   }
 
-  // ---------- init ----------
+  // ---------- polling ----------
 
-  function registerLocalDriver(d) { drivers.push(d); }
+  var POLL_MS = 3000;
+
+  // Se llama una vez al cargar y luego cada POLL_MS: así el manager se entera de
+  // trancaderas reportadas desde el celular del chofer, y de asignaciones/llegadas
+  // hechas desde otra pestaña o desde el propio celular, sin reiniciar la animación
+  // de un camión que ya se está moviendo (solo se toca si `assigned_at` cambió).
+  function pollState() {
+    api("GET", "/manager/state").then(function (r) {
+      if (!r.ok) return;
+      var state = r.data;
+      warehouseId = state.warehouse_node_id;
+      if (warehouseId) warehouseLabel.textContent = nodesById[warehouseId].name;
+      trafficByNode = state.traffic || {};
+      applyBlockedState(state.blocked_edges || []);
+      refreshAllNodeStyles();
+
+      (state.drivers || []).forEach(function (d) {
+        var idx = drivers.findIndex(function (x) { return x.id === d.id; });
+        if (idx === -1) drivers.push(d);
+        else drivers[idx] = Object.assign({}, drivers[idx], d);
+
+        if (d.status === "en_ruta" && d.route) {
+          if (driverRouteAssignedAt[d.id] !== d.route.assigned_at) {
+            driverRouteAssignedAt[d.id] = d.route.assigned_at;
+            startDriverSimulation(d);
+          }
+        } else if (driverMarkers[d.id]) {
+          removeDriverMarkerAndTrail(d.id);
+        }
+      });
+
+      applyAlertsState(state.alerts || []);
+      refreshDriverList();
+    }).catch(function () {
+      updateStatus("No se pudo conectar con el backend (¿está corriendo en :5000?). Los datos no se guardarán.");
+    });
+  }
+
+  // ---------- init ----------
 
   eventLogDateInput.value = currentLogDate;
   loadLogForDate(currentLogDate);
 
-  api("GET", "/manager/state").then(function (r) {
-    var state = r.data;
-    warehouseId = state.warehouse_node_id;
-    if (warehouseId) warehouseLabel.textContent = nodesById[warehouseId].name;
-    trafficByNode = state.traffic || {};
-    applyBlockedState(state.blocked_edges || []);
-    refreshAllNodeStyles();
-
-    state.drivers.forEach(function (d) {
-      registerLocalDriver(d);
-      if (d.status === "en_ruta" && d.route) startDriverSimulation(d);
-    });
-    refreshDriverList();
-  }).catch(function () {
-    updateStatus("No se pudo conectar con el backend (¿está corriendo en :5000?). Los datos no se guardarán.");
-  });
+  pollState();
+  setInterval(pollState, POLL_MS);
 
   // ---------- debug hook ----------
   window.__debugManager = {

@@ -56,7 +56,9 @@
       "Bash(taskkill *)",
       "Bash(../.venv/Scripts/python.exe no_cache_server.py 8000)",
       "Bash(D:/development/ia/act1/.venv/Scripts/python.exe *)",
-      "Artifact"
+      "Artifact",
+      "Bash(\"../.venv/Scripts/python.exe\" app.py)",
+      "Bash(\"/d/development/ia/act1/.venv/Scripts/python\" app.py)"
     ]
   }
 }

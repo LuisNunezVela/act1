@@ -1,0 +1,9 @@
+{
+  "liveServer.settings.ignoreFiles": [
+    "data/**",
+    "backend/**",
+    ".venv/**",
+    "**/__pycache__/**",
+    "notebook/**"
+  ]
+}

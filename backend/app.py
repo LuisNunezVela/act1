@@ -100,6 +100,16 @@ def init_db() -> None:
             icon TEXT,
             message TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS road_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            driver_id TEXT NOT NULL,
+            node_a TEXT NOT NULL,
+            node_b TEXT NOT NULL,
+            lat REAL NOT NULL,
+            lng REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            dismissed INTEGER NOT NULL DEFAULT 0
+        );
         """
     )
     driver_cols = {row["name"] for row in conn.execute("PRAGMA table_info(drivers)").fetchall()}
@@ -569,6 +579,9 @@ def load_manager_state() -> dict:
     driver_rows = conn.execute("SELECT id, name, status, route_json, assigned_at, photo_filename FROM drivers").fetchall()
     traffic_rows = conn.execute("SELECT node_id, level FROM node_traffic").fetchall()
     blocked_rows = conn.execute("SELECT node_a, node_b, reason, blocked_at FROM blocked_edges").fetchall()
+    alert_rows = conn.execute(
+        "SELECT id, driver_id, node_a, node_b, lat, lng, created_at FROM road_alerts WHERE dismissed = 0"
+    ).fetchall()
     conn.close()
 
     drivers = []
@@ -595,6 +608,13 @@ def load_manager_state() -> dict:
         "blocked_edges": [
             {"node_a": r["node_a"], "node_b": r["node_b"], "reason": r["reason"], "blocked_at": r["blocked_at"]}
             for r in blocked_rows
+        ],
+        "alerts": [
+            {
+                "id": r["id"], "driver_id": r["driver_id"], "node_a": r["node_a"], "node_b": r["node_b"],
+                "lat": r["lat"], "lng": r["lng"], "created_at": r["created_at"],
+            }
+            for r in alert_rows
         ],
     }
 
@@ -804,6 +824,68 @@ def manager_unblock_edge(node_a, node_b):
         {"node_a": r["node_a"], "node_b": r["node_b"], "reason": r["reason"], "blocked_at": r["blocked_at"]}
         for r in blocked_rows
     ])
+
+
+def _alerts_response():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, driver_id, node_a, node_b, lat, lng, created_at FROM road_alerts WHERE dismissed = 0"
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r["id"], "driver_id": r["driver_id"], "node_a": r["node_a"], "node_b": r["node_b"],
+            "lat": r["lat"], "lng": r["lng"], "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+
+@app.route("/manager/alerts", methods=["POST"])
+def manager_create_alert():
+    body = request.get_json(silent=True) or {}
+    driver_id = body.get("driver_id")
+    node_a = body.get("node_a")
+    node_b = body.get("node_b")
+    lat = body.get("lat")
+    lng = body.get("lng")
+
+    if not isinstance(lat, (int, float)) or not isinstance(lng, (int, float)):
+        return jsonify(error="Coordenadas inválidas."), 400
+    if node_a not in NODES_BY_ID or node_b not in NODES_BY_ID:
+        return jsonify(error="Uno de los nodos no existe en el grafo."), 400
+    if frozenset({node_a, node_b}) not in EDGE_PAIRS:
+        return jsonify(error="No hay una calle directa entre esos nodos."), 400
+
+    conn = get_db()
+    driver_row = conn.execute("SELECT name FROM drivers WHERE id = ?", (driver_id,)).fetchone()
+    if driver_row is None:
+        conn.close()
+        return jsonify(error="Chofer no encontrado."), 404
+
+    a, b = canonical_pair(node_a, node_b)
+    created_at = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO road_alerts (driver_id, node_a, node_b, lat, lng, created_at, dismissed) "
+        "VALUES (?, ?, ?, ?, ?, ?, 0)",
+        (driver_id, a, b, lat, lng, created_at),
+    )
+    conn.execute(
+        "INSERT INTO event_log (ts, icon, message) VALUES (?, ?, ?)",
+        (created_at, "❗", driver_row["name"] + " reportó una trancadera"),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(_alerts_response()), 201
+
+
+@app.route("/manager/alerts/<int:alert_id>", methods=["DELETE"])
+def manager_dismiss_alert(alert_id):
+    conn = get_db()
+    conn.execute("UPDATE road_alerts SET dismissed = 1 WHERE id = ?", (alert_id,))
+    conn.commit()
+    conn.close()
+    return jsonify(_alerts_response())
 
 
 @app.route("/manager/drivers/<driver_id>/photo", methods=["POST"])
