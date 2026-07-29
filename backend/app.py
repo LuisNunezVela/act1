@@ -115,6 +115,20 @@ def init_db() -> None:
     driver_cols = {row["name"] for row in conn.execute("PRAGMA table_info(drivers)").fetchall()}
     if "photo_filename" not in driver_cols:
         conn.execute("ALTER TABLE drivers ADD COLUMN photo_filename TEXT")
+    if "last_node_id" not in driver_cols:
+        conn.execute("ALTER TABLE drivers ADD COLUMN last_node_id TEXT")
+    if "idle_since" not in driver_cols:
+        conn.execute("ALTER TABLE drivers ADD COLUMN idle_since TEXT")
+
+    # backfill de choferes idle creados antes de este ancla de paseo (last_node_id/idle_since):
+    # sin esto se quedarían sin posición y nunca aparecerían paseando por el mapa
+    warehouse_row = conn.execute("SELECT node_id FROM warehouse WHERE id = 1").fetchone()
+    if warehouse_row and warehouse_row["node_id"]:
+        conn.execute(
+            "UPDATE drivers SET last_node_id = ?, idle_since = ? "
+            "WHERE status = 'idle' AND last_node_id IS NULL",
+            (warehouse_row["node_id"], datetime.now(timezone.utc).isoformat()),
+        )
     conn.commit()
     conn.close()
 
@@ -576,7 +590,9 @@ def photo_url_for(filename) -> str | None:
 def load_manager_state() -> dict:
     conn = get_db()
     warehouse_row = conn.execute("SELECT node_id FROM warehouse WHERE id = 1").fetchone()
-    driver_rows = conn.execute("SELECT id, name, status, route_json, assigned_at, photo_filename FROM drivers").fetchall()
+    driver_rows = conn.execute(
+        "SELECT id, name, status, route_json, assigned_at, photo_filename, last_node_id, idle_since FROM drivers"
+    ).fetchall()
     traffic_rows = conn.execute("SELECT node_id, level FROM node_traffic").fetchall()
     blocked_rows = conn.execute("SELECT node_a, node_b, reason, blocked_at FROM blocked_edges").fetchall()
     alert_rows = conn.execute(
@@ -599,6 +615,8 @@ def load_manager_state() -> dict:
             "route": route,
             "assigned_at": row["assigned_at"],
             "photo_url": photo_url_for(row["photo_filename"]),
+            "last_node_id": row["last_node_id"],
+            "idle_since": row["idle_since"],
         })
 
     return {
@@ -645,10 +663,20 @@ def manager_add_driver():
     if not name:
         return jsonify(error="El nombre del chofer no puede estar vacío."), 400
 
-    driver = {"id": uuid.uuid4().hex[:8], "name": name, "status": "idle", "route": None, "assigned_at": None, "photo_url": None}
     conn = get_db()
-    conn.execute("INSERT INTO drivers (id, name, status, route_json, assigned_at) VALUES (?, ?, 'idle', NULL, NULL)",
-                 (driver["id"], name))
+    warehouse_row = conn.execute("SELECT node_id FROM warehouse WHERE id = 1").fetchone()
+    last_node_id = warehouse_row["node_id"] if warehouse_row else None
+    idle_since = datetime.now(timezone.utc).isoformat()
+
+    driver = {
+        "id": uuid.uuid4().hex[:8], "name": name, "status": "idle", "route": None, "assigned_at": None,
+        "photo_url": None, "last_node_id": last_node_id, "idle_since": idle_since,
+    }
+    conn.execute(
+        "INSERT INTO drivers (id, name, status, route_json, assigned_at, last_node_id, idle_since) "
+        "VALUES (?, ?, 'idle', NULL, NULL, ?, ?)",
+        (driver["id"], name, last_node_id, idle_since),
+    )
     conn.commit()
     conn.close()
     return jsonify(driver), 201
@@ -673,7 +701,10 @@ def manager_delete_driver(driver_id):
 @app.route("/manager/drivers/<driver_id>/assign", methods=["POST"])
 def manager_assign_route(driver_id):
     body = request.get_json(silent=True) or {}
-    required = ["stops", "node_path", "polyline", "distance_m", "time_s"]
+    required = [
+        "stops", "node_path", "polyline", "distance_m", "time_s",
+        "pickup_node_path", "pickup_polyline", "pickup_distance_m", "pickup_time_s",
+    ]
     if not all(k in body for k in required):
         return jsonify(error="Faltan datos de la ruta."), 400
 
@@ -694,6 +725,10 @@ def manager_assign_route(driver_id):
         "distance_m": body["distance_m"],
         "time_s": body["time_s"],
         "peak_hour": bool(body.get("peak_hour", False)),
+        "pickup_node_path": body["pickup_node_path"],
+        "pickup_polyline": body["pickup_polyline"],
+        "pickup_distance_m": body["pickup_distance_m"],
+        "pickup_time_s": body["pickup_time_s"],
         "assigned_at": assigned_at,
     }
     conn.execute(
@@ -708,17 +743,26 @@ def manager_assign_route(driver_id):
 @app.route("/manager/drivers/<driver_id>/complete", methods=["POST"])
 def manager_complete_route(driver_id):
     conn = get_db()
-    row = conn.execute("SELECT status FROM drivers WHERE id = ?", (driver_id,)).fetchone()
+    row = conn.execute("SELECT status, route_json, last_node_id FROM drivers WHERE id = ?", (driver_id,)).fetchone()
     if row is None:
         conn.close()
         return jsonify(error="Chofer no encontrado."), 404
+
+    last_node_id = row["last_node_id"]
+    if row["route_json"]:
+        node_path = json.loads(row["route_json"]).get("node_path")
+        if node_path:
+            last_node_id = node_path[-1]
+    idle_since = datetime.now(timezone.utc).isoformat()
+
     # UPDATE...WHERE status='en_ruta' + rowcount es atómico a nivel SQL: si dos pestañas
     # llaman a este endpoint casi al mismo tiempo para el mismo chofer, solo una de las dos
     # consigue actualizar la fila (SQLite serializa escrituras concurrentes), sin depender de
     # que el servidor Flask sea single-threaded (que en la práctica no siempre lo es)
     cur = conn.execute(
-        "UPDATE drivers SET status = 'idle', route_json = NULL, assigned_at = NULL WHERE id = ? AND status = 'en_ruta'",
-        (driver_id,),
+        "UPDATE drivers SET status = 'idle', route_json = NULL, assigned_at = NULL, "
+        "last_node_id = ?, idle_since = ? WHERE id = ? AND status = 'en_ruta'",
+        (last_node_id, idle_since, driver_id),
     )
     was_en_ruta = cur.rowcount > 0
     conn.commit()

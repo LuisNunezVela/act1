@@ -15,6 +15,7 @@
   var SIM_TICK_MS = 100;
   var SIM_SPEED_FACTOR = 1;
   var UNLOAD_WAIT_S = 20;
+  var WAREHOUSE_WAIT_S = 15;
   var POLL_MS = 3000;
 
   var COLORS = {
@@ -328,88 +329,161 @@
     });
   }
 
-  // Reusa el mismo modelo de tres casos que manager.js (startDriverSimulation):
-  // A) todavía manejando, B) llegó y espera descarga, C) viaje + descarga ya pasaron.
-  // Así, si el celular se abre bastante después de asignada la ruta, el camión aparece
-  // ya avanzado en vez de arrancar de cero desde el almacén.
+  function arrivalFlagAt(point) {
+    return L.marker(point, { icon: L.divIcon({ className: "driver-marker arrival-flag", html: "🚩", iconSize: null }) }).addTo(map);
+  }
+
+  // Reusa el mismo modelo de 5 fases que manager.js (startDriverSimulation): A) yendo al
+  // almacén a recoger el pedido, B) esperando en el almacén, C) entregando (almacén -> paradas),
+  // D) llegó y espera descarga, E) todo ya pasó. Así, si el celular se abre bastante después de
+  // assigned_at, el camión aparece ya avanzado en la fase que corresponda, en vez de arrancar
+  // de cero.
   function startTracking(driver) {
     clearSimTimers();
     clearRouteVisuals();
 
     var peakOn = driver.route.peak_hour;
-    var hops = buildHopsFromNodePath(driver.route.node_path, peakOn);
-    currentHops = hops;
-    if (hops.length === 0) return;
+    var pickupHops = buildHopsFromNodePath(driver.route.pickup_node_path, peakOn);
+    var deliveryHops = buildHopsFromNodePath(driver.route.node_path, peakOn);
+    if (pickupHops.length === 0 && deliveryHops.length === 0) return;
 
-    routeLine.setLatLngs(driver.route.polyline);
+    function withBounds(hops) {
+      var cum = 0;
+      var bounds = hops.map(function (h) { var start = cum; cum += h.time_s; return { start: start, end: cum, hop: h }; });
+      return { hops: hops, bounds: bounds, totalSimTime: cum };
+    }
+    var pickup = withBounds(pickupHops);
+    var delivery = withBounds(deliveryHops);
+    currentHops = pickup.hops.length ? pickup.hops : delivery.hops;
 
-    var cumTime = 0;
-    var hopBounds = hops.map(function (h) {
-      var start = cumTime; cumTime += h.time_s;
-      return { start: start, end: cumTime, hop: h };
-    });
-    var totalTime = cumTime;
+    routeLine.setLatLngs(
+      pickup.hops.length ? driver.route.pickup_polyline.concat(driver.route.polyline.slice(1)) : driver.route.polyline
+    );
 
-    var tripRealSeconds = totalTime / SIM_SPEED_FACTOR;
-    var totalRealSecondsWithUnload = tripRealSeconds + UNLOAD_WAIT_S;
+    var pickupTripRealSeconds = pickup.totalSimTime / SIM_SPEED_FACTOR;
+    var deliveryTripRealSeconds = delivery.totalSimTime / SIM_SPEED_FACTOR;
+
+    var T1 = pickupTripRealSeconds;        // llega al almacén
+    var T2 = T1 + WAREHOUSE_WAIT_S;        // sale del almacén, empieza la entrega
+    var T3 = T2 + deliveryTripRealSeconds; // llega al destino final
+    var T4 = T3 + UNLOAD_WAIT_S;           // termina la descarga
 
     var assignedAtMs = driver.route.assigned_at ? new Date(driver.route.assigned_at).getTime() : Date.now();
     var realElapsedSinceAssign = Math.max(0, (Date.now() - assignedAtMs) / 1000);
 
-    var destPoint = hops[hops.length - 1].points[hops[hops.length - 1].points.length - 1];
+    var warehousePoint = pickup.hops.length
+      ? pickup.hops[pickup.hops.length - 1].points[pickup.hops[pickup.hops.length - 1].points.length - 1]
+      : (delivery.hops.length ? delivery.hops[0].points[0] : null);
+    var destPoint = delivery.hops.length
+      ? delivery.hops[delivery.hops.length - 1].points[delivery.hops[delivery.hops.length - 1].points.length - 1]
+      : warehousePoint;
+    var bearingHops = delivery.hops.length ? delivery.hops : pickup.hops;
 
-    // Caso C: viaje + descarga ya terminaron mientras el celular estaba cerrado.
-    if (realElapsedSinceAssign >= totalRealSecondsWithUnload) {
-      placeTruck(destPoint, initialBearing(hops));
-      flagMarker = L.marker(destPoint, { icon: L.divIcon({ className: "driver-marker arrival-flag", html: "🚩", iconSize: null }) }).addTo(map);
-      updateTrail(hops, hopBounds, totalTime, totalTime);
+    // Fase E: recogida + espera + entrega + descarga ya pasaron mientras el celular estaba cerrado.
+    if (realElapsedSinceAssign >= T4) {
+      placeTruck(destPoint, initialBearing(bearingHops));
+      flagMarker = arrivalFlagAt(destPoint);
+      updateTrail(delivery.hops, delivery.bounds, delivery.totalSimTime, delivery.totalSimTime);
       statusEl.textContent = "Entregado";
       finalizeArrival(driver);
       return;
     }
 
-    var initialPos = realElapsedSinceAssign < tripRealSeconds
-      ? positionAtElapsed(hops, hopBounds, realElapsedSinceAssign * SIM_SPEED_FACTOR)
-      : destPoint;
-    placeTruck(initialPos, initialBearing(hops));
-    statusEl.textContent = "En ruta";
-
-    // Caso B: ya llegó, en espera de descarga.
-    if (realElapsedSinceAssign >= tripRealSeconds) {
-      updateTrail(hops, hopBounds, totalTime, totalTime);
-      flagMarker = L.marker(destPoint, { icon: L.divIcon({ className: "driver-marker arrival-flag", html: "🚩", iconSize: null }) }).addTo(map);
+    // Fase D: llegó al destino, esperando que termine la descarga.
+    if (realElapsedSinceAssign >= T3) {
+      placeTruck(destPoint, initialBearing(bearingHops));
+      updateTrail(delivery.hops, delivery.bounds, delivery.totalSimTime, delivery.totalSimTime);
+      flagMarker = arrivalFlagAt(destPoint);
       statusEl.textContent = "Descargando…";
-      var remainingUnloadMs = (totalRealSecondsWithUnload - realElapsedSinceAssign) * 1000;
-      arrivalTimer = setTimeout(function () { finalizeArrival(driver); }, remainingUnloadMs);
+      arrivalTimer = setTimeout(function () { finalizeArrival(driver); }, (T4 - realElapsedSinceAssign) * 1000);
       return;
     }
 
-    // Caso A: todavía manejando.
-    var elapsed = realElapsedSinceAssign * SIM_SPEED_FACTOR;
-    updateTrail(hops, hopBounds, totalTime, elapsed);
+    // Fase C: entregando (almacén -> paradas). Se llama tanto al resumir directo en esta fase
+    // como al terminar la espera en el almacén (transición en vivo, más abajo).
+    function startDeliveringPhase(realElapsedIntoPhase) {
+      currentHops = delivery.hops;
+      var elapsed = realElapsedIntoPhase * SIM_SPEED_FACTOR;
+      var pos = positionAtElapsed(delivery.hops, delivery.bounds, elapsed);
+      if (!truckMarker) placeTruck(pos, initialBearing(delivery.hops)); else moveTruckTo(pos);
+      updateTrail(delivery.hops, delivery.bounds, delivery.totalSimTime, elapsed);
+      statusEl.textContent = "En ruta";
+
+      simTimer = setInterval(function () {
+        elapsed += (SIM_TICK_MS / 1000) * SIM_SPEED_FACTOR;
+        if (elapsed >= delivery.totalSimTime) {
+          elapsed = delivery.totalSimTime;
+          moveTruckTo(destPoint);
+          updateTrail(delivery.hops, delivery.bounds, delivery.totalSimTime, delivery.totalSimTime);
+          clearInterval(simTimer);
+          simTimer = null;
+          return;
+        }
+        moveTruckTo(positionAtElapsed(delivery.hops, delivery.bounds, elapsed));
+        updateTrail(delivery.hops, delivery.bounds, delivery.totalSimTime, elapsed);
+      }, SIM_TICK_MS);
+
+      arrivalTimer = setTimeout(function () {
+        moveTruckTo(destPoint);
+        updateTrail(delivery.hops, delivery.bounds, delivery.totalSimTime, delivery.totalSimTime);
+        if (simTimer) { clearInterval(simTimer); simTimer = null; }
+        flagMarker = arrivalFlagAt(destPoint);
+        statusEl.textContent = "Descargando…";
+        arrivalTimer = setTimeout(function () { finalizeArrival(driver); }, UNLOAD_WAIT_S * 1000);
+      }, (deliveryTripRealSeconds - realElapsedIntoPhase) * 1000);
+    }
+
+    if (realElapsedSinceAssign >= T2) {
+      startDeliveringPhase(realElapsedSinceAssign - T2);
+      return;
+    }
+
+    // Fase B: esperando en el almacén (recogiendo el pedido).
+    if (realElapsedSinceAssign >= T1) {
+      if (!truckMarker) placeTruck(warehousePoint, initialBearing(bearingHops)); else moveTruckTo(warehousePoint);
+      flagMarker = arrivalFlagAt(warehousePoint);
+      statusEl.textContent = "Recogiendo pedido…";
+      showPhoneBanner("Llegaste al almacén — recogiendo el pedido");
+      arrivalTimer = setTimeout(function () {
+        if (flagMarker) { map.removeLayer(flagMarker); flagMarker = null; }
+        startDeliveringPhase(0);
+      }, (T2 - realElapsedSinceAssign) * 1000);
+      return;
+    }
+
+    // Fase A: todavía yendo al almacén a recoger el pedido.
+    currentHops = pickup.hops;
+    var elapsedPickup = realElapsedSinceAssign * SIM_SPEED_FACTOR;
+    placeTruck(positionAtElapsed(pickup.hops, pickup.bounds, elapsedPickup), initialBearing(pickup.hops));
+    updateTrail(pickup.hops, pickup.bounds, pickup.totalSimTime, elapsedPickup);
+    statusEl.textContent = "Yendo a recoger el pedido…";
 
     simTimer = setInterval(function () {
-      elapsed += (SIM_TICK_MS / 1000) * SIM_SPEED_FACTOR;
-      if (elapsed >= totalTime) {
-        elapsed = totalTime;
-        moveTruckTo(destPoint);
-        updateTrail(hops, hopBounds, totalTime, totalTime);
+      elapsedPickup += (SIM_TICK_MS / 1000) * SIM_SPEED_FACTOR;
+      if (elapsedPickup >= pickup.totalSimTime) {
+        elapsedPickup = pickup.totalSimTime;
+        moveTruckTo(warehousePoint);
+        updateTrail(pickup.hops, pickup.bounds, pickup.totalSimTime, pickup.totalSimTime);
         clearInterval(simTimer);
         simTimer = null;
         return;
       }
-      moveTruckTo(positionAtElapsed(hops, hopBounds, elapsed));
-      updateTrail(hops, hopBounds, totalTime, elapsed);
+      moveTruckTo(positionAtElapsed(pickup.hops, pickup.bounds, elapsedPickup));
+      updateTrail(pickup.hops, pickup.bounds, pickup.totalSimTime, elapsedPickup);
     }, SIM_TICK_MS);
 
     arrivalTimer = setTimeout(function () {
-      moveTruckTo(destPoint);
-      updateTrail(hops, hopBounds, totalTime, totalTime);
+      moveTruckTo(warehousePoint);
+      updateTrail(pickup.hops, pickup.bounds, pickup.totalSimTime, pickup.totalSimTime);
       if (simTimer) { clearInterval(simTimer); simTimer = null; }
-      flagMarker = L.marker(destPoint, { icon: L.divIcon({ className: "driver-marker arrival-flag", html: "🚩", iconSize: null }) }).addTo(map);
-      statusEl.textContent = "Descargando…";
-      arrivalTimer = setTimeout(function () { finalizeArrival(driver); }, UNLOAD_WAIT_S * 1000);
-    }, (tripRealSeconds - realElapsedSinceAssign) * 1000);
+      flagMarker = arrivalFlagAt(warehousePoint);
+      statusEl.textContent = "Recogiendo pedido…";
+      showPhoneBanner("Llegaste al almacén — recogiendo el pedido");
+      arrivalTimer = setTimeout(function () {
+        if (flagMarker) { map.removeLayer(flagMarker); flagMarker = null; }
+        startDeliveringPhase(0);
+      }, WAREHOUSE_WAIT_S * 1000);
+    }, (T1 - realElapsedSinceAssign) * 1000);
   }
 
   function applyDriverState(driver) {

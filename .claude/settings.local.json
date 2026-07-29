@@ -58,7 +58,8 @@
       "Bash(D:/development/ia/act1/.venv/Scripts/python.exe *)",
       "Artifact",
       "Bash(\"../.venv/Scripts/python.exe\" app.py)",
-      "Bash(\"/d/development/ia/act1/.venv/Scripts/python\" app.py)"
+      "Bash(\"/d/development/ia/act1/.venv/Scripts/python\" app.py)",
+      "Bash(echo \"PID: $!\")"
     ]
   }
 }

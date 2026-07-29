@@ -28,6 +28,7 @@
   var SIM_TICK_MS = 100;
   var SIM_SPEED_FACTOR = 1; // 1 s real = 1 s simulado (tiempo real, para revisar que todo ande bien)
   var UNLOAD_WAIT_S = 20;          // espera real fija de "descarga" al llegar — NO se escala por SIM_SPEED_FACTOR
+  var WAREHOUSE_WAIT_S = 15;       // espera real fija "recogiendo pedido" en el almacén — NO se escala por SIM_SPEED_FACTOR
   var TOAST_AUTO_DISMISS_MS = 6000;
 
   // ---------- geometry helpers (duplicados de app.js, cada página es autocontenida) ----------
@@ -744,10 +745,18 @@
       opt.value = "";
       driverSelect.appendChild(opt);
     } else {
-      idleDrivers.forEach(function (d) {
+      // sugiere al chofer idle más cercano al almacén (por línea recta a su posición
+      // actual de paseo), preseleccionado — el manager sigue confirmando con "Asignar"
+      var warehousePoint = [nodesById[warehouseId].lat, nodesById[warehouseId].lon];
+      var ranked = idleDrivers.map(function (d) {
+        var pos = wanderPositionNow(d) || warehousePoint;
+        return { driver: d, distM: haversineMeters(pos, warehousePoint) };
+      }).sort(function (a, b) { return a.distM - b.distM; });
+      ranked.forEach(function (r, i) {
         var opt = document.createElement("option");
-        opt.value = d.id;
-        opt.textContent = d.name;
+        opt.value = r.driver.id;
+        opt.textContent = r.driver.name + (i === 0 ? " (más cercano)" : "");
+        if (i === 0) opt.selected = true;
         driverSelect.appendChild(opt);
       });
     }
@@ -761,8 +770,37 @@
     routeSummary.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
+  // camino más corto entre dos nodos cualesquiera (usado para el tramo de recogida
+  // chofer -> almacén); reusa las mismas utilidades que computeRoute()
+  function computeLeg(startId, endId, peakOn) {
+    var distMap = dijkstra(startId, effectiveWeightFn(peakOn));
+    var nodePath = reconstructPath(distMap.prev, startId, endId);
+    if (!nodePath) return null;
+    var hops = buildHopsFromNodePath(nodePath, peakOn);
+    return {
+      node_path: nodePath,
+      polyline: pathToLatLngs(nodePath),
+      distance_m: hops.reduce(function (s, h) { return s + h.distance_m; }, 0),
+      time_s: hops.reduce(function (s, h) { return s + h.time_s; }, 0),
+    };
+  }
+
   function assignRoute(driverId) {
-    api("POST", "/manager/drivers/" + driverId + "/assign", currentRouteDraft).then(function (r) {
+    var driver = drivers.filter(function (d) { return d.id === driverId; })[0];
+    if (!driver) { alert("Chofer no encontrado."); return; }
+    var pickupStart = driver.last_node_id || warehouseId;
+    var pickupLeg = computeLeg(pickupStart, warehouseId, currentRouteDraft.peak_hour);
+    if (!pickupLeg) {
+      alert("No hay camino posible entre la posición actual del chofer y el almacén (revisa las calles bloqueadas).");
+      return;
+    }
+    var body = Object.assign({}, currentRouteDraft, {
+      pickup_node_path: pickupLeg.node_path,
+      pickup_polyline: pickupLeg.polyline,
+      pickup_distance_m: pickupLeg.distance_m,
+      pickup_time_s: pickupLeg.time_s,
+    });
+    api("POST", "/manager/drivers/" + driverId + "/assign", body).then(function (r) {
       if (!r.ok) { alert(r.data.error || "No se pudo asignar la ruta."); return; }
       var merged = updateLocalDriver(r.data);
       startDriverSimulation(merged);
@@ -940,6 +978,8 @@
       drivers.push(r.data);
       driverNameInput.value = "";
       refreshDriverList();
+      driverWanderAnchorSeen[r.data.id] = r.data.idle_since;
+      startDriverWander(r.data);
     }).catch(function () { alert("No se pudo conectar con el backend (¿está corriendo en :5000?)."); });
   });
 
@@ -947,8 +987,124 @@
     api("DELETE", "/manager/drivers/" + id).then(function (r) {
       if (!r.ok) { alert(r.data.error || "No se pudo eliminar el chofer."); return; }
       drivers = drivers.filter(function (d) { return d.id !== id; });
+      clearDriverWander(id);
+      delete driverWanderAnchorSeen[id];
+      delete driverWanderState[id];
       refreshDriverList();
     }).catch(function () { alert("No se pudo conectar con el backend (¿está corriendo en :5000?)."); });
+  }
+
+  // ---------- paseo idle: choferes sin pedido caminan al azar por el grafo ----------
+  //
+  // Igual que la simulación de viajes, esto es puramente client-side y determinista:
+  // la posición de un chofer idle en cualquier instante se deriva de (last_node_id,
+  // idle_since) más un RNG sembrado con esos dos valores, así que cualquier pestaña que
+  // haga el mismo cálculo llega a la misma posición sin que el backend empuje updates.
+
+  var driverWanderTimers = {};      // setInterval por chofer, keyed por driver.id
+  var driverWanderState = {};       // {rng, hops, hopBounds, cumTime, currentNode, prevNode, anchor, idleSince}
+  var driverWanderAnchorSeen = {};  // {driverId: idle_since visto la última vez}, evita reiniciar el loop en cada poll
+
+  function xmur3(str) {
+    var h = 1779033703 ^ str.length;
+    for (var i = 0; i < str.length; i++) {
+      h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
+    }
+    return function () {
+      h = Math.imul(h ^ (h >>> 16), 2246822519);
+      h = Math.imul(h ^ (h >>> 13), 3266489917);
+      h ^= h >>> 16;
+      return h >>> 0;
+    };
+  }
+
+  function mulberry32(seed) {
+    var a = seed;
+    return function () {
+      a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function makeRng(seedStr) { return mulberry32(xmur3(seedStr)()); }
+
+  var WANDER_HOP_GUARD = 2000; // tope de hops generados por llamada, por si un nodo quedara aislado
+
+  // Extiende (memoizado por chofer) una caminata aleatoria de hops a partir de last_node_id
+  // hasta cubrir uptoSeconds de duración simulada; reusa buildHops/edgeTimeSeconds/pointsBetween
+  // para que la geometría/tiempo de cada hop sea idéntico al de un viaje real.
+  function ensureWanderHops(driver, uptoSeconds) {
+    var st = driverWanderState[driver.id];
+    if (!st || st.anchor !== driver.last_node_id || st.idleSince !== driver.idle_since) {
+      st = {
+        rng: makeRng(driver.id + "|" + driver.idle_since),
+        hops: [], hopBounds: [], cumTime: 0,
+        currentNode: driver.last_node_id, prevNode: null,
+        anchor: driver.last_node_id, idleSince: driver.idle_since,
+      };
+      driverWanderState[driver.id] = st;
+    }
+    var guard = 0;
+    while (st.cumTime < uptoSeconds && guard++ < WANDER_HOP_GUARD) {
+      var options = (adjacency[st.currentNode] || []).filter(function (a) { return !isBlocked(a.edge); });
+      if (options.length === 0) break; // nodo aislado o todo bloqueado: se queda quieto ahí
+      var nonBack = st.prevNode ? options.filter(function (a) { return a.to !== st.prevNode; }) : options;
+      var pool = nonBack.length > 0 ? nonBack : options;
+      var pick = pool[Math.floor(st.rng() * pool.length) % pool.length];
+      var hop = {
+        from: st.currentNode, to: pick.to, points: pointsBetween(st.currentNode, pick.to),
+        distance_m: pick.edge.weight, time_s: edgeTimeSeconds(pick.edge, false),
+      };
+      var start = st.cumTime;
+      st.cumTime += hop.time_s || 0.001; // evita loop infinito si algún edge tuviera peso 0
+      st.hops.push(hop);
+      st.hopBounds.push({ start: start, end: st.cumTime, hop: hop });
+      st.prevNode = st.currentNode;
+      st.currentNode = pick.to;
+    }
+    return st;
+  }
+
+  function wanderPositionNow(driver) {
+    if (!driver.last_node_id || !driver.idle_since) return null;
+    var elapsed = (Date.now() - new Date(driver.idle_since).getTime()) / 1000;
+    if (elapsed < 0) elapsed = 0;
+    var st = ensureWanderHops(driver, elapsed);
+    if (st.hops.length === 0) {
+      var n = nodesById[driver.last_node_id];
+      return [n.lat, n.lon];
+    }
+    return positionAtElapsed(st.hops, st.hopBounds, elapsed);
+  }
+
+  function clearDriverWander(driverId) {
+    if (driverWanderTimers[driverId]) { clearInterval(driverWanderTimers[driverId]); delete driverWanderTimers[driverId]; }
+  }
+
+  function startDriverWander(driver) {
+    clearDriverWander(driver.id);
+    if (!driver.last_node_id) {
+      if (driverMarkers[driver.id]) { map.removeLayer(driverMarkers[driver.id]); delete driverMarkers[driver.id]; }
+      return;
+    }
+
+    function render() {
+      var pos = wanderPositionNow(driver);
+      if (!pos) return;
+      if (!driverMarkers[driver.id]) {
+        var marker = L.marker(pos, { icon: L.divIcon({ className: "driver-marker driver-marker-idle", html: "🚗", iconSize: null }) }).addTo(map);
+        marker.bindTooltip(driver.name + " (paseando)", { direction: "top", offset: [0, -10] });
+        marker.on("click", function () { openDriverDetail(driver.id); });
+        driverMarkers[driver.id] = marker;
+      } else {
+        driverMarkers[driver.id].setLatLng(pos);
+      }
+    }
+    render();
+    driverWanderTimers[driver.id] = setInterval(render, SIM_TICK_MS);
   }
 
   // ---------- simulación ----------
@@ -993,6 +1149,7 @@
   }
 
   function removeDriverMarkerAndTrail(driverId) {
+    clearDriverWander(driverId);
     if (driverMarkers[driverId]) { map.removeLayer(driverMarkers[driverId]); delete driverMarkers[driverId]; }
     removeDriverFlag(driverId);
     removeDriverTrail(driverId);
@@ -1076,101 +1233,171 @@
   }
 
   // driver.route.assigned_at permite RETOMAR una simulación en curso (por ejemplo, tras
-  // recargar la página) desde el tiempo real transcurrido en vez de reiniciarla desde el
-  // almacén. Tres casos posibles según cuánto tiempo real pasó desde assigned_at:
-  //   A) todavía manejando           -> retoma la animación + agenda la llegada
-  //   B) llegó, esperando descarga   -> camión+bandera fijos en destino, agenda el resto de la espera
-  //   C) viaje + descarga ya pasaron -> finaliza de inmediato, sin animación ni aviso (evento viejo)
-  // La espera de descarga (UNLOAD_WAIT_S) es tiempo REAL fijo, no se escala por SIM_SPEED_FACTOR.
+  // recargar la página) desde el tiempo real transcurrido en vez de reiniciarla desde cero.
+  // Cinco fases posibles según cuánto tiempo real pasó desde assigned_at, cada una con su
+  // franja fija de segundos reales a partir de assigned_at:
+  //   A) yendo al almacén (recogiendo pedido)  -> [0, T1)
+  //   B) esperando en el almacén               -> [T1, T2)  espera fija WAREHOUSE_WAIT_S
+  //   C) entregando (almacén -> paradas)        -> [T2, T3)
+  //   D) llegó, esperando descarga              -> [T3, T4)  espera fija UNLOAD_WAIT_S
+  //   E) todo ya terminó                        -> [T4, ∞)  finaliza de inmediato, sin aviso (evento viejo)
+  // Ninguna de las dos esperas fijas se escala por SIM_SPEED_FACTOR.
   function startDriverSimulation(driver) {
     clearDriverSimTimers(driver.id);
+    clearDriverWander(driver.id);
+    delete driverWanderAnchorSeen[driver.id];
     removeDriverFlag(driver.id); // limpia una bandera de una simulación previa si se re-entra
 
     var peakOn = driver.route.peak_hour;
-    var hops = buildHopsFromNodePath(driver.route.node_path, peakOn);
-    if (hops.length === 0) return;
+    var pickupHops = buildHopsFromNodePath(driver.route.pickup_node_path, peakOn);
+    var deliveryHops = buildHopsFromNodePath(driver.route.node_path, peakOn);
+    if (pickupHops.length === 0 && deliveryHops.length === 0) return;
 
-    var cumTime = 0;
-    var hopBounds = hops.map(function (h) {
-      var start = cumTime; cumTime += h.time_s;
-      return { start: start, end: cumTime, hop: h };
-    });
-    var totalTime = cumTime; // segundos "simulados" (ya con tráfico aplicado)
+    function withBounds(hops) {
+      var cum = 0;
+      var bounds = hops.map(function (h) { var start = cum; cum += h.time_s; return { start: start, end: cum, hop: h }; });
+      return { hops: hops, bounds: bounds, totalSimTime: cum };
+    }
+    var pickup = withBounds(pickupHops);
+    var delivery = withBounds(deliveryHops);
 
-    var tripRealSeconds = totalTime / SIM_SPEED_FACTOR;
-    var totalRealSecondsWithUnload = tripRealSeconds + UNLOAD_WAIT_S;
+    var pickupTripRealSeconds = pickup.totalSimTime / SIM_SPEED_FACTOR;
+    var deliveryTripRealSeconds = delivery.totalSimTime / SIM_SPEED_FACTOR;
+
+    var T1 = pickupTripRealSeconds;        // llega al almacén
+    var T2 = T1 + WAREHOUSE_WAIT_S;        // sale del almacén, empieza la entrega
+    var T3 = T2 + deliveryTripRealSeconds; // llega al destino final
+    var T4 = T3 + UNLOAD_WAIT_S;           // termina la descarga
 
     var assignedAtMs = driver.route.assigned_at ? new Date(driver.route.assigned_at).getTime() : Date.now();
     var realElapsedSinceAssign = Math.max(0, (Date.now() - assignedAtMs) / 1000);
 
-    var destPoint = hops[hops.length - 1].points[hops[hops.length - 1].points.length - 1];
-    var nodePath = driver.route.node_path;
+    var warehousePoint = pickup.hops.length
+      ? pickup.hops[pickup.hops.length - 1].points[pickup.hops[pickup.hops.length - 1].points.length - 1]
+      : (delivery.hops.length ? delivery.hops[0].points[0] : null);
+    var destPoint = delivery.hops.length
+      ? delivery.hops[delivery.hops.length - 1].points[delivery.hops[delivery.hops.length - 1].points.length - 1]
+      : warehousePoint;
 
+    var pickupNodePath = driver.route.pickup_node_path, nodePath = driver.route.node_path;
     driverSimState[driver.id] = {
-      hopBounds: hopBounds,
-      tripRealSeconds: tripRealSeconds,
-      assignedAtMs: assignedAtMs,
-      originName: nodesById[nodePath[0]].name,
-      destName: nodesById[nodePath[nodePath.length - 1]].name,
-      totalDistanceM: hops.reduce(function (s, h) { return s + h.distance_m; }, 0),
+      assignedAtMs: assignedAtMs, T1: T1, T2: T2, T3: T3, T4: T4,
+      pickupHopBounds: pickup.bounds,
+      pickupTotalDistanceM: pickup.hops.reduce(function (s, h) { return s + h.distance_m; }, 0),
+      pickupOriginName: nodesById[pickupNodePath[0]].name,
+      pickupDestName: nodesById[pickupNodePath[pickupNodePath.length - 1]].name,
+      deliveryHopBounds: delivery.bounds,
+      deliveryTotalDistanceM: delivery.hops.reduce(function (s, h) { return s + h.distance_m; }, 0),
+      deliveryOriginName: nodesById[nodePath[0]].name,
+      deliveryDestName: nodesById[nodePath[nodePath.length - 1]].name,
     };
 
-    if (driverMarkers[driver.id]) map.removeLayer(driverMarkers[driver.id]);
+    if (driverMarkers[driver.id]) { map.removeLayer(driverMarkers[driver.id]); delete driverMarkers[driver.id]; }
 
-    // Caso C: viaje + descarga ya terminaron mientras la página estaba cerrada/recargando.
-    if (realElapsedSinceAssign >= totalRealSecondsWithUnload) {
-      var markerC = L.marker(destPoint, { icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }) }).addTo(map);
-      markerC.bindTooltip(driver.name, { direction: "top", offset: [0, -10] });
-      markerC.on("click", function () { openDriverDetail(driver.id); });
-      driverMarkers[driver.id] = markerC;
+    function placeTruckAt(pos) {
+      var marker = L.marker(pos, { icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }) }).addTo(map);
+      marker.bindTooltip(driver.name, { direction: "top", offset: [0, -10] });
+      marker.on("click", function () { openDriverDetail(driver.id); });
+      driverMarkers[driver.id] = marker;
+      return marker;
+    }
+
+    // Fase E: recogida + espera + entrega + descarga ya pasaron mientras la página estaba cerrada.
+    if (realElapsedSinceAssign >= T4) {
+      placeTruckAt(destPoint);
       placeArrivalFlag(driver.id, destPoint);
       finalizeArrival(driver, { suppressToast: true });
       return;
     }
 
-    var initialPos = realElapsedSinceAssign < tripRealSeconds
-      ? positionAtElapsed(hops, hopBounds, realElapsedSinceAssign * SIM_SPEED_FACTOR)
-      : destPoint;
-    var marker = L.marker(initialPos, { icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }) }).addTo(map);
-    marker.bindTooltip(driver.name, { direction: "top", offset: [0, -10] });
-    marker.on("click", function () { openDriverDetail(driver.id); });
-    driverMarkers[driver.id] = marker;
-
-    // Caso B: ya llegó, en espera de descarga. Camión + bandera fijos en destino, sin animar.
-    if (realElapsedSinceAssign >= tripRealSeconds) {
-      updateDriverTrail(driver.id, hops, hopBounds, totalTime, totalTime);
+    // Fase D: llegó al destino, esperando que termine la descarga (camión + bandera fijos).
+    if (realElapsedSinceAssign >= T3) {
+      placeTruckAt(destPoint);
+      updateDriverTrail(driver.id, delivery.hops, delivery.bounds, delivery.totalSimTime, delivery.totalSimTime);
       placeArrivalFlag(driver.id, destPoint);
-      var remainingUnloadMs = (totalRealSecondsWithUnload - realElapsedSinceAssign) * 1000;
-      driverArrivalTimers[driver.id] = setTimeout(function () { finalizeArrival(driver); }, remainingUnloadMs);
+      driverArrivalTimers[driver.id] = setTimeout(function () { finalizeArrival(driver); }, (T4 - realElapsedSinceAssign) * 1000);
       return;
     }
 
-    // Caso A: todavía manejando. Retoma animación + trail, agenda la transición a "descarga"
-    // para el instante exacto en que el viaje debería terminar.
-    var elapsed = realElapsedSinceAssign * SIM_SPEED_FACTOR;
-    updateDriverTrail(driver.id, hops, hopBounds, totalTime, elapsed);
+    // Fase C: entregando (almacén -> paradas). Se llama tanto al resumir directo en esta fase
+    // como al terminar la espera en el almacén (transición en vivo, más abajo).
+    function startDeliveringPhase(realElapsedIntoPhase) {
+      var elapsed = realElapsedIntoPhase * SIM_SPEED_FACTOR;
+      var marker = driverMarkers[driver.id] || placeTruckAt(positionAtElapsed(delivery.hops, delivery.bounds, elapsed));
+      marker.setLatLng(positionAtElapsed(delivery.hops, delivery.bounds, elapsed));
+      updateDriverTrail(driver.id, delivery.hops, delivery.bounds, delivery.totalSimTime, elapsed);
+
+      driverTimers[driver.id] = setInterval(function () {
+        elapsed += (SIM_TICK_MS / 1000) * SIM_SPEED_FACTOR;
+        if (elapsed >= delivery.totalSimTime) {
+          elapsed = delivery.totalSimTime;
+          marker.setLatLng(destPoint);
+          updateDriverTrail(driver.id, delivery.hops, delivery.bounds, delivery.totalSimTime, delivery.totalSimTime);
+          clearInterval(driverTimers[driver.id]);
+          delete driverTimers[driver.id];
+          return;
+        }
+        marker.setLatLng(positionAtElapsed(delivery.hops, delivery.bounds, elapsed));
+        updateDriverTrail(driver.id, delivery.hops, delivery.bounds, delivery.totalSimTime, elapsed);
+      }, SIM_TICK_MS);
+
+      driverArrivalTimers[driver.id] = setTimeout(function () {
+        marker.setLatLng(destPoint);
+        updateDriverTrail(driver.id, delivery.hops, delivery.bounds, delivery.totalSimTime, delivery.totalSimTime);
+        if (driverTimers[driver.id]) { clearInterval(driverTimers[driver.id]); delete driverTimers[driver.id]; }
+        placeArrivalFlag(driver.id, destPoint);
+        driverArrivalTimers[driver.id] = setTimeout(function () { finalizeArrival(driver); }, UNLOAD_WAIT_S * 1000);
+      }, (deliveryTripRealSeconds - realElapsedIntoPhase) * 1000);
+    }
+
+    if (realElapsedSinceAssign >= T2) {
+      startDeliveringPhase(realElapsedSinceAssign - T2);
+      return;
+    }
+
+    // Fase B: esperando en el almacén (recogiendo el pedido). Al resumir dentro de esta franja
+    // se avisa igual, mismo criterio que el resto de la simulación (no deduplica entre pestañas).
+    if (realElapsedSinceAssign >= T1) {
+      placeTruckAt(warehousePoint);
+      placeArrivalFlag(driver.id, warehousePoint);
+      showWarehouseToast(driver);
+      driverArrivalTimers[driver.id] = setTimeout(function () {
+        removeDriverFlag(driver.id);
+        startDeliveringPhase(0);
+      }, (T2 - realElapsedSinceAssign) * 1000);
+      return;
+    }
+
+    // Fase A: todavía yendo al almacén a recoger el pedido.
+    var elapsedPickup = realElapsedSinceAssign * SIM_SPEED_FACTOR;
+    var marker = placeTruckAt(positionAtElapsed(pickup.hops, pickup.bounds, elapsedPickup));
+    updateDriverTrail(driver.id, pickup.hops, pickup.bounds, pickup.totalSimTime, elapsedPickup);
 
     driverTimers[driver.id] = setInterval(function () {
-      elapsed += (SIM_TICK_MS / 1000) * SIM_SPEED_FACTOR;
-      if (elapsed >= totalTime) {
-        elapsed = totalTime;
-        marker.setLatLng(destPoint);
-        updateDriverTrail(driver.id, hops, hopBounds, totalTime, totalTime);
+      elapsedPickup += (SIM_TICK_MS / 1000) * SIM_SPEED_FACTOR;
+      if (elapsedPickup >= pickup.totalSimTime) {
+        elapsedPickup = pickup.totalSimTime;
+        marker.setLatLng(warehousePoint);
+        updateDriverTrail(driver.id, pickup.hops, pickup.bounds, pickup.totalSimTime, pickup.totalSimTime);
         clearInterval(driverTimers[driver.id]);
         delete driverTimers[driver.id];
         return;
       }
-      marker.setLatLng(positionAtElapsed(hops, hopBounds, elapsed));
-      updateDriverTrail(driver.id, hops, hopBounds, totalTime, elapsed);
+      marker.setLatLng(positionAtElapsed(pickup.hops, pickup.bounds, elapsedPickup));
+      updateDriverTrail(driver.id, pickup.hops, pickup.bounds, pickup.totalSimTime, elapsedPickup);
     }, SIM_TICK_MS);
 
     driverArrivalTimers[driver.id] = setTimeout(function () {
-      marker.setLatLng(destPoint);
-      updateDriverTrail(driver.id, hops, hopBounds, totalTime, totalTime);
+      marker.setLatLng(warehousePoint);
+      updateDriverTrail(driver.id, pickup.hops, pickup.bounds, pickup.totalSimTime, pickup.totalSimTime);
       if (driverTimers[driver.id]) { clearInterval(driverTimers[driver.id]); delete driverTimers[driver.id]; }
-      placeArrivalFlag(driver.id, destPoint);
-      driverArrivalTimers[driver.id] = setTimeout(function () { finalizeArrival(driver); }, UNLOAD_WAIT_S * 1000);
-    }, (tripRealSeconds - realElapsedSinceAssign) * 1000);
+      placeArrivalFlag(driver.id, warehousePoint);
+      showWarehouseToast(driver);
+      driverArrivalTimers[driver.id] = setTimeout(function () {
+        removeDriverFlag(driver.id);
+        startDeliveringPhase(0);
+      }, WAREHOUSE_WAIT_S * 1000);
+    }, (T1 - realElapsedSinceAssign) * 1000);
   }
 
   function finalizeArrival(driver, opts) {
@@ -1210,6 +1437,28 @@
     setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, TOAST_AUTO_DISMISS_MS);
   }
 
+  function showWarehouseToast(driver) {
+    var toast = document.createElement("div");
+    toast.className = "arrival-toast";
+    var icon = document.createElement("span");
+    icon.className = "arrival-toast-icon";
+    icon.textContent = "📦";
+    var text = document.createElement("span");
+    text.className = "arrival-toast-text";
+    var strong = document.createElement("strong");
+    strong.textContent = driver.name;
+    var sub = document.createElement("span");
+    sub.textContent = "ha llegado al almacén — recogiendo pedido";
+    text.appendChild(strong);
+    text.appendChild(sub);
+    toast.appendChild(icon);
+    toast.appendChild(text);
+    arrivalToastStack.appendChild(toast);
+    setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, TOAST_AUTO_DISMISS_MS);
+    playArrivalChime();
+    logEvent("📦", driver.name + " ha llegado al almacén y está recogiendo el pedido");
+  }
+
   var audioCtx = null;
   function playArrivalChime() {
     try {
@@ -1236,15 +1485,10 @@
   var selectedDriverId = null;
   var driverDetailInterval = null;
 
-  function computeDriverProgress(driverId) {
-    var s = driverSimState[driverId];
-    if (!s) return null;
-    var realElapsed = Math.max(0, (Date.now() - s.assignedAtMs) / 1000);
-    var tripElapsed = Math.min(realElapsed, s.tripRealSeconds);
-    var elapsed = tripElapsed * SIM_SPEED_FACTOR; // "segundos simulados", misma unidad que hopBounds
+  function distanceTraveled(hopBounds, elapsed) {
     var traveledM = 0;
-    for (var i = 0; i < s.hopBounds.length; i++) {
-      var hb = s.hopBounds[i];
+    for (var i = 0; i < hopBounds.length; i++) {
+      var hb = hopBounds[i];
       if (elapsed >= hb.end) {
         traveledM += hb.hop.distance_m;
       } else if (elapsed > hb.start) {
@@ -1255,18 +1499,58 @@
         break;
       }
     }
-    var remainingM = Math.max(0, s.totalDistanceM - traveledM);
-    var remainingRealS = Math.max(0, s.tripRealSeconds - realElapsed);
-    var progressPct = s.totalDistanceM === 0 ? 100 : Math.min(100, (traveledM / s.totalDistanceM) * 100);
+    return traveledM;
+  }
+
+  // Determina en cuál de las 5 fases está el chofer ahora mismo (ver comentario de
+  // startDriverSimulation) y devuelve el progreso relativo a esa fase, para el panel de detalle.
+  function computeDriverProgress(driverId) {
+    var s = driverSimState[driverId];
+    if (!s) return null;
+    var realElapsed = Math.max(0, (Date.now() - s.assignedAtMs) / 1000);
+
+    if (realElapsed < s.T1) {
+      var traveledM = distanceTraveled(s.pickupHopBounds, realElapsed * SIM_SPEED_FACTOR);
+      return {
+        phase: "to_warehouse",
+        progressPct: s.pickupTotalDistanceM === 0 ? 100 : Math.min(100, (traveledM / s.pickupTotalDistanceM) * 100),
+        remainingM: Math.max(0, s.pickupTotalDistanceM - traveledM),
+        remainingRealS: Math.max(0, s.T1 - realElapsed),
+        arrived: false,
+        originName: s.pickupOriginName,
+        destName: s.pickupDestName,
+      };
+    }
+    if (realElapsed < s.T2) {
+      return {
+        phase: "at_warehouse", progressPct: 100, remainingM: 0, remainingRealS: Math.max(0, s.T2 - realElapsed),
+        arrived: true, originName: s.pickupOriginName, destName: s.pickupDestName,
+      };
+    }
+    if (realElapsed < s.T3) {
+      var traveledM2 = distanceTraveled(s.deliveryHopBounds, (realElapsed - s.T2) * SIM_SPEED_FACTOR);
+      return {
+        phase: "delivering",
+        progressPct: s.deliveryTotalDistanceM === 0 ? 100 : Math.min(100, (traveledM2 / s.deliveryTotalDistanceM) * 100),
+        remainingM: Math.max(0, s.deliveryTotalDistanceM - traveledM2),
+        remainingRealS: Math.max(0, s.T3 - realElapsed),
+        arrived: false,
+        originName: s.deliveryOriginName,
+        destName: s.deliveryDestName,
+      };
+    }
     return {
-      progressPct: progressPct,
-      remainingM: remainingM,
-      remainingRealS: remainingRealS,
-      arrived: realElapsed >= s.tripRealSeconds,
-      originName: s.originName,
-      destName: s.destName,
+      phase: "unloading", progressPct: 100, remainingM: 0, remainingRealS: Math.max(0, s.T4 - realElapsed),
+      arrived: true, originName: s.deliveryOriginName, destName: s.deliveryDestName,
     };
   }
+
+  var PHASE_STATUS_LABEL = {
+    to_warehouse: "Yendo a recoger el pedido…",
+    at_warehouse: "Recogiendo pedido…",
+    delivering: "En ruta",
+    unloading: "Descargando…",
+  };
 
   function refreshDriverDetailPanel() {
     if (!selectedDriverId) return;
@@ -1283,12 +1567,16 @@
       return;
     }
 
-    driverDetailStatus.textContent = progress.arrived ? "Descargando…" : "En ruta";
+    driverDetailStatus.textContent = PHASE_STATUS_LABEL[progress.phase] || "En ruta";
     driverDetailOrigin.textContent = progress.originName;
     driverDetailDest.textContent = progress.destName;
     driverDetailProgressFill.style.width = progress.progressPct.toFixed(1) + "%";
     driverDetailKm.textContent = progress.arrived ? "0 m" : fmtMeters(progress.remainingM);
-    driverDetailEta.textContent = progress.arrived ? "Llegó, descargando…" : ("Llega en " + fmtDuration(progress.remainingRealS));
+    driverDetailEta.textContent = progress.phase === "at_warehouse"
+      ? ("Sale en " + fmtDuration(progress.remainingRealS))
+      : progress.phase === "unloading"
+        ? "Llegó, descargando…"
+        : ("Llega en " + fmtDuration(progress.remainingRealS));
   }
 
   function openDriverDetail(driverId) {
@@ -1408,6 +1696,15 @@
           if (driverRouteAssignedAt[d.id] !== d.route.assigned_at) {
             driverRouteAssignedAt[d.id] = d.route.assigned_at;
             startDriverSimulation(d);
+          }
+        } else if (d.status === "idle") {
+          delete driverRouteAssignedAt[d.id];
+          if (driverWanderAnchorSeen[d.id] !== d.idle_since) {
+            driverWanderAnchorSeen[d.id] = d.idle_since;
+            clearDriverSimTimers(d.id);
+            removeDriverFlag(d.id);
+            removeDriverTrail(d.id);
+            startDriverWander(d);
           }
         } else if (driverMarkers[d.id]) {
           removeDriverMarkerAndTrail(d.id);
