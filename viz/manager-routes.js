@@ -49,7 +49,72 @@ function cancelRouteDraft() {
   refreshAllNodeStyles();
   routeSummary.style.display = "none";
   routeDraftLayer.clearLayers();
+  resetPackagePhotoWidget();
   setMode("route-stops");
+}
+
+// ordena choferes idle por distancia en línea recta (su posición actual de paseo) al
+// almacén; usado tanto para la preselección por defecto como para la de la IA
+function rankIdleDriversByDistance(candidateDrivers, warehousePoint) {
+  return candidateDrivers.map(function (d) {
+    var pos = wanderPositionNow(d) || warehousePoint;
+    return { driver: d, distM: haversineMeters(pos, warehousePoint) };
+  }).sort(function (a, b) { return a.distM - b.distM; });
+}
+
+var driverSelectHint = document.getElementById("driver-select-hint");
+
+function populateDriverSelect(ranked, noneMessage) {
+  driverSelect.innerHTML = "";
+  driverSelectHint.style.display = "none"; // solo se muestra tras analizar una foto (showDriverSelectHint)
+  if (ranked.length === 0) {
+    var opt = document.createElement("option");
+    opt.textContent = noneMessage;
+    opt.value = "";
+    driverSelect.appendChild(opt);
+    return;
+  }
+  ranked.forEach(function (r, i) {
+    var opt = document.createElement("option");
+    opt.value = r.driver.id;
+    opt.textContent = (VEHICLE_ICONS[r.driver.vehicle_type] || "") + " " + r.driver.name + (i === 0 ? " (más cercano)" : "");
+    if (i === 0) opt.selected = true;
+    driverSelect.appendChild(opt);
+  });
+}
+
+// ETA real por calles (no línea recta) de un chofer hasta el almacén, reusando el mismo
+// cálculo del tramo de recogida real que se usará si se lo asigna
+function pickupEtaText(driver, peakOn) {
+  var pickupLeg = computePickupLeg(driver, peakOn);
+  return pickupLeg ? fmtDuration(pickupLeg.time_s) : "desconocido";
+}
+
+// muestra hasta dos líneas: el más cercano EXACTAMENTE con el vehículo que sugirió la IA (si
+// hay alguno idle), y el más cercano en general entre todos los que alcanzan (rank >= mínimo) —
+// por si el más cercano en el vehículo exacto está lejos. Solo se muestra después de analizar
+// una foto del encargo (ver applyPackageAnalysis), no en la preselección por defecto.
+function showDriverSelectHint(vehiculoMinimo, ranked) {
+  var peakOn = currentRouteDraft ? currentRouteDraft.peak_hour : false;
+  var general = ranked[0].driver;
+  var exactMatch = ranked.filter(function (r) { return r.driver.vehicle_type === vehiculoMinimo; })[0];
+
+  var lines = [];
+  if (exactMatch && exactMatch.driver.id !== general.id) {
+    lines.push(
+      "El conductor libre más cercano en " + VEHICLE_ICONS[vehiculoMinimo] + " " + VEHICLE_LABELS[vehiculoMinimo] +
+      " que puede llevarlo es: <strong>" + exactMatch.driver.name + "</strong> — llega al almacén en ~" +
+      pickupEtaText(exactMatch.driver, peakOn) + "."
+    );
+  }
+  lines.push(
+    "Conductor recomendado más cercano: <strong>" + general.name +
+    "</strong> (" + VEHICLE_ICONS[general.vehicle_type] + " " + VEHICLE_LABELS[general.vehicle_type] +
+    ") — llega al almacén en ~" + pickupEtaText(general, peakOn) + "."
+  );
+
+  driverSelectHint.style.display = "block";
+  driverSelectHint.innerHTML = lines.map(function (l) { return "<p>" + l + "</p>"; }).join("");
 }
 
 function computeRoute(startId, stopIds, peakOn) {
@@ -96,31 +161,15 @@ function finalizeRoute() {
   routeSummaryBody.innerHTML =
     "<p><strong>Orden:</strong> " + orderNames.join(" → ") + "</p>" +
     "<p><strong>Distancia:</strong> " + fmtMeters(distance_m) + " &middot; <strong>Tiempo estimado:</strong> " + fmtDuration(time_s) + "</p>" +
-    "<p class=\"hint\">El orden se optimiza por distancia; con hora pico activada se optimiza por tiempo (puede rodear nodos con tráfico alto y siempre evita calles bloqueadas)." + algoNote + "</p>";
+    "<p class=\"hint\">" + algoNote + "</p>";
 
-  driverSelect.innerHTML = "";
+  // sugiere al chofer idle más cercano al almacén (por línea recta a su posición actual de
+  // paseo), preseleccionado — el manager sigue confirmando con "Asignar" (o sube una foto del
+  // encargo para que la IA sugiera el chofer según el vehículo necesario, más abajo)
   var idleDrivers = drivers.filter(function (d) { return d.status === "idle"; });
-  if (idleDrivers.length === 0) {
-    var opt = document.createElement("option");
-    opt.textContent = "No hay choferes disponibles";
-    opt.value = "";
-    driverSelect.appendChild(opt);
-  } else {
-    // sugiere al chofer idle más cercano al almacén (por línea recta a su posición
-    // actual de paseo), preseleccionado — el manager sigue confirmando con "Asignar"
-    var warehousePoint = [nodesById[warehouseId].lat, nodesById[warehouseId].lon];
-    var ranked = idleDrivers.map(function (d) {
-      var pos = wanderPositionNow(d) || warehousePoint;
-      return { driver: d, distM: haversineMeters(pos, warehousePoint) };
-    }).sort(function (a, b) { return a.distM - b.distM; });
-    ranked.forEach(function (r, i) {
-      var opt = document.createElement("option");
-      opt.value = r.driver.id;
-      opt.textContent = r.driver.name + (i === 0 ? " (más cercano)" : "");
-      if (i === 0) opt.selected = true;
-      driverSelect.appendChild(opt);
-    });
-  }
+  var warehousePoint = [nodesById[warehouseId].lat, nodesById[warehouseId].lon];
+  populateDriverSelect(rankIdleDriversByDistance(idleDrivers, warehousePoint), "No hay choferes disponibles");
+  resetPackagePhotoWidget();
 
   routeSummary.style.display = "block";
   routeDraftLayer.clearLayers();
@@ -219,7 +268,86 @@ function assignRoute(driverId) {
     refreshAllNodeStyles();
     routeSummary.style.display = "none";
     routeDraftLayer.clearLayers();
+    resetPackagePhotoWidget();
     setMode("none");
   }).catch(function () { alert("No se pudo conectar con el backend (¿está corriendo en :5000?)."); });
+}
+
+// ---------- foto del encargo: la IA describe qué ve y sugiere el chofer más cercano capaz ----------
+
+var packagePhotoDrop = document.getElementById("package-photo-drop");
+var packagePhotoInput = document.getElementById("package-photo-input");
+var packageAnalysisResult = document.getElementById("package-analysis-result");
+
+function resetPackagePhotoWidget() {
+  packagePhotoDrop.textContent = "📦 Agregar foto del paquete";
+  packagePhotoDrop.classList.remove("has-photo");
+  packageAnalysisResult.style.display = "none";
+  packageAnalysisResult.textContent = "";
+  packageAnalysisResult.classList.remove("error");
+  driverSelectHint.style.display = "none";
+}
+
+packagePhotoDrop.addEventListener("click", function () { packagePhotoInput.click(); });
+
+packagePhotoInput.addEventListener("change", function () {
+  var file = packagePhotoInput.files[0];
+  packagePhotoInput.value = "";
+  if (!file || !currentRouteDraft) return;
+
+  packagePhotoDrop.textContent = "📦 Analizando foto…";
+  packageAnalysisResult.style.display = "none";
+  packageAnalysisResult.classList.remove("error");
+
+  var formData = new FormData();
+  formData.append("photo", file);
+  fetch(BACKEND + "/manager/analyze-package", { method: "POST", body: formData })
+    .then(function (res) { return res.json().then(function (data) { return { ok: res.ok, data: data }; }); })
+    .then(function (r) {
+      packagePhotoDrop.textContent = "📦 Foto del paquete (click para cambiar)";
+      packagePhotoDrop.classList.add("has-photo");
+      if (!r.ok) {
+        packageAnalysisResult.classList.add("error");
+        packageAnalysisResult.textContent = r.data.error || "No se pudo analizar la imagen.";
+        packageAnalysisResult.style.display = "block";
+        return;
+      }
+      applyPackageAnalysis(r.data);
+    })
+    .catch(function () {
+      packagePhotoDrop.textContent = "📦 Agregar foto del paquete";
+      packagePhotoDrop.classList.remove("has-photo");
+      packageAnalysisResult.classList.add("error");
+      packageAnalysisResult.textContent = "No se pudo conectar con el backend (¿está corriendo en :5000?).";
+      packageAnalysisResult.style.display = "block";
+    });
+});
+
+// filtra choferes idle cuyo vehículo alcanza (VEHICLE_RANK) lo que la IA pidió, los reordena
+// por cercanía, y preselecciona en el mismo <select> de siempre — el manager confirma con el
+// botón "Asignar ruta" ya existente, sin nada nuevo que aprender
+function applyPackageAnalysis(analysis) {
+  var minRank = VEHICLE_RANK[analysis.vehiculo_minimo];
+  var idleDrivers = drivers.filter(function (d) { return d.status === "idle"; });
+  var capable = idleDrivers.filter(function (d) { return VEHICLE_RANK[d.vehicle_type] >= minRank; });
+  var warehousePoint = [nodesById[warehouseId].lat, nodesById[warehouseId].lon];
+
+  packageAnalysisResult.style.display = "block";
+  if (capable.length === 0) {
+    packageAnalysisResult.classList.add("error");
+    packageAnalysisResult.innerHTML =
+      "Puedo notar que es <strong>" + analysis.descripcion + "</strong>. Esto puede ser llevado por: " +
+      VEHICLE_LABELS[analysis.vehiculo_minimo] + " o superior. Ningún chofer libre tiene ahora mismo un " +
+      "vehículo con capacidad suficiente — asigná manualmente o cambiá el vehículo de algún chofer en la lista.";
+    return;
+  }
+
+  var ranked = rankIdleDriversByDistance(capable, warehousePoint);
+  populateDriverSelect(ranked, "No hay choferes disponibles");
+  showDriverSelectHint(analysis.vehiculo_minimo, ranked);
+  packageAnalysisResult.classList.remove("error");
+  packageAnalysisResult.innerHTML =
+    "Puedo notar que es <strong>" + analysis.descripcion + "</strong>. Esto puede ser llevado por: " +
+    VEHICLE_LABELS[analysis.vehiculo_minimo] + " o superior.";
 }
 

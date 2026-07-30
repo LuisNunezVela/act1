@@ -23,6 +23,13 @@ var UNLOAD_WAIT_S = 20;    // espera fija de "descarga" al llegar, en segundos a
 var WAREHOUSE_WAIT_S = 15; // espera fija "recogiendo pedido" en el almacén, en segundos a 1x (se escala por SIM_SPEED_FACTOR)
 var TOAST_AUTO_DISMISS_MS = 6000;
 
+// tipos de vehículo: orden de menor a mayor capacidad, usado para saber si un chofer puede
+// llevar un encargo que la IA clasificó con un vehículo mínimo (VEHICLE_RANK[d.vehicle_type]
+// >= VEHICLE_RANK[minimo])
+var VEHICLE_ICONS = { moto: "🏍️", auto: "🚗", noa: "🚐", camion: "🚚" };
+var VEHICLE_LABELS = { moto: "Moto", auto: "Auto", noa: "Furgoneta", camion: "Camión" };
+var VEHICLE_RANK = { moto: 0, auto: 1, noa: 2, camion: 3 };
+
 // ---------- geometry helpers (duplicados de app.js, cada página es autocontenida) ----------
 
 var nodesById = {};

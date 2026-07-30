@@ -617,6 +617,72 @@ code {
 
 .node-list-item:last-child { border-bottom: none; }
 
+.driver-card { border-bottom: 1px solid var(--border); }
+.driver-card:last-child { border-bottom: none; }
+.driver-card .node-list-item { border-bottom: none; padding-bottom: 2px; }
+
+.driver-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 8px 44px; /* 44px alinea bajo el label, dejando el ancho del avatar + gap */
+}
+
+.driver-vehicle-select,
+.driver-capacity-input {
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--navy);
+  background: white;
+}
+
+.driver-capacity-input { width: 100px; }
+
+/* --- foto del encargo, en el resumen de ruta ("Finalizar ruta"): la IA sugiere el vehículo
+   y el chofer más cercano capaz de llevarlo --- */
+
+#package-photo-drop {
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+#package-photo-drop:hover { border-color: var(--teal); color: var(--navy); }
+#package-photo-drop.has-photo { border-style: solid; color: var(--navy); }
+
+#package-analysis-result {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--gray-bg);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+#package-analysis-result.error { background: #fde8e8; color: #b42318; }
+#package-analysis-result strong { color: var(--navy); }
+
+#driver-select-hint {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--gray-bg);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+#driver-select-hint strong { color: var(--navy); }
+#driver-select-hint p { margin: 0; }
+#driver-select-hint p + p { margin-top: 6px; }
+
 .node-list-item input {
   border: none;
   background: transparent;
@@ -638,6 +704,19 @@ code {
   width: auto;
   flex-shrink: 0;
   margin-bottom: 0;
+}
+
+/* botones de solo ícono (📱 ver celular, 🗑️ eliminar) en la fila del chofer: chicos y
+   cuadrados en vez de botones de texto, para dejarle espacio al nombre en la fila */
+.btn-icon-only {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
 }
 
 /* --- manager.html specific --- */
@@ -755,7 +834,10 @@ code {
   background: var(--gray-bg);
 }
 
-#drivers-body .field-group { margin-bottom: 10px; }
+#drivers-body .field-group { margin-bottom: 10px; flex-wrap: wrap; }
+#drivers-body .field-group input#driver-name-input { flex: 1 1 100%; }
+#drivers-body .field-group select#driver-vehicle-input,
+#drivers-body .field-group input#driver-capacity-input { flex: 1 1 auto; min-width: 0; }
 #drivers-body #driver-list { background: white; border-radius: 8px; margin-bottom: 10px; }
 #drivers-body .legend { margin: 0; }
 

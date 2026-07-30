@@ -13,6 +13,7 @@ No calcula rutas ni costos aquí: eso ya lo hace viz/app.js con bfs()/dfs().
 Este backend solo interpreta el lenguaje natural, valida los nodos, y
 redacta la respuesta conversacional con los números que le pasa el frontend.
 """
+import base64
 import re
 import json
 import sqlite3
@@ -30,6 +31,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -119,6 +121,10 @@ def init_db() -> None:
         conn.execute("ALTER TABLE drivers ADD COLUMN last_node_id TEXT")
     if "idle_since" not in driver_cols:
         conn.execute("ALTER TABLE drivers ADD COLUMN idle_since TEXT")
+    if "vehicle_type" not in driver_cols:
+        conn.execute("ALTER TABLE drivers ADD COLUMN vehicle_type TEXT NOT NULL DEFAULT 'auto'")
+    if "max_capacity_kg" not in driver_cols:
+        conn.execute("ALTER TABLE drivers ADD COLUMN max_capacity_kg REAL")
 
     # backfill de choferes idle creados antes de este ancla de paseo (last_node_id/idle_since):
     # sin esto se quedarían sin posición y nunca aparecerían paseando por el mapa
@@ -138,6 +144,9 @@ init_db()
 
 def canonical_pair(a: str, b: str) -> tuple[str, str]:
     return (a, b) if a < b else (b, a)
+
+
+VEHICLE_TYPES = ("moto", "auto", "noa", "camion")
 
 
 WEATHER_CODES = {
@@ -399,6 +408,40 @@ explain_chain = explain_prompt | llm | StrOutputParser()
 manager_intent_chain = manager_intent_prompt | llm.with_structured_output(ManagerIntent)
 manager_confirm_chain = manager_confirm_prompt | llm | StrOutputParser()
 
+
+class PackageAnalysis(BaseModel):
+    descripcion: str = Field(
+        description="Breve descripción en español de lo que se ve en la foto (ej. 'una bolsa de "
+        "plástico con productos medianos', 'una caja de cartón grande'). No menciones el vehículo aquí."
+    )
+    vehiculo_minimo: Literal["moto", "auto", "noa", "camion"] = Field(
+        description=(
+            "El vehículo MÁS CHICO que alcanza para transportar esto (no el más grande posible). "
+            "Escala de menor a mayor tamaño/peso, con ejemplos concretos: "
+            "'moto' — una bolsa o caja chica de mano, un sobre/paquete, algo que entra en una mochila "
+            "o en el compartimento bajo el asiento de una moto (hasta ~5-8 kg; ej. una bolsa de "
+            "mercado, un par de cajas de zapatos, un paquete pequeño). "
+            "'auto' — una caja o bolsa mediana, varias bolsas de compras, algo que entra en el asiento "
+            "trasero o el baúl de un auto sin ocupar todo el espacio (ej. una caja de electrodoméstico "
+            "chico, dos o tres cajas medianas apiladas). "
+            "'noa' (furgoneta tipo Toyota Noah) — carga voluminosa que ya no entra cómoda en un auto: "
+            "varias cajas grandes, un electrodoméstico mediano o grande, una mudanza chica. "
+            "'camion' — carga grande, pesada, o muchas unidades juntas (pallets, muebles grandes, "
+            "materiales de construcción). "
+            "Elegí SIEMPRE el vehículo más chico que sea razonable para el tamaño real que ves en la "
+            "foto — no asumas que hace falta algo más grande de lo necesario."
+        )
+    )
+
+
+package_vision_llm = llm.with_structured_output(PackageAnalysis)
+PACKAGE_VISION_INSTRUCTIONS = (
+    "Sos un asistente logístico de EasyRoute. Analiza esta foto de un encargo/paquete a entregar: "
+    "describí brevemente qué es y qué tan grande parece (tamaño relativo — no inventes un peso "
+    "exacto), y clasificá el vehículo MÁS CHICO que alcanza para llevarlo, siguiendo la escala "
+    "moto < auto < furgoneta (noa) < camión. No elijas un vehículo más grande de lo necesario."
+)
+
 app = Flask(__name__)
 CORS(app)  # dev local: frontend estático y backend corren en orígenes distintos
 
@@ -591,7 +634,8 @@ def load_manager_state() -> dict:
     conn = get_db()
     warehouse_row = conn.execute("SELECT node_id FROM warehouse WHERE id = 1").fetchone()
     driver_rows = conn.execute(
-        "SELECT id, name, status, route_json, assigned_at, photo_filename, last_node_id, idle_since FROM drivers"
+        "SELECT id, name, status, route_json, assigned_at, photo_filename, last_node_id, idle_since, "
+        "vehicle_type, max_capacity_kg FROM drivers"
     ).fetchall()
     traffic_rows = conn.execute("SELECT node_id, level FROM node_traffic").fetchall()
     blocked_rows = conn.execute("SELECT node_a, node_b, reason, blocked_at FROM blocked_edges").fetchall()
@@ -617,6 +661,8 @@ def load_manager_state() -> dict:
             "photo_url": photo_url_for(row["photo_filename"]),
             "last_node_id": row["last_node_id"],
             "idle_since": row["idle_since"],
+            "vehicle_type": row["vehicle_type"],
+            "max_capacity_kg": row["max_capacity_kg"],
         })
 
     return {
@@ -663,6 +709,16 @@ def manager_add_driver():
     if not name:
         return jsonify(error="El nombre del chofer no puede estar vacío."), 400
 
+    vehicle_type = body.get("vehicle_type")
+    if vehicle_type not in VEHICLE_TYPES:
+        vehicle_type = "auto"
+    max_capacity_kg = body.get("max_capacity_kg")
+    if max_capacity_kg is not None:
+        try:
+            max_capacity_kg = float(max_capacity_kg)
+        except (TypeError, ValueError):
+            max_capacity_kg = None
+
     conn = get_db()
     warehouse_row = conn.execute("SELECT node_id FROM warehouse WHERE id = 1").fetchone()
     last_node_id = warehouse_row["node_id"] if warehouse_row else None
@@ -671,15 +727,59 @@ def manager_add_driver():
     driver = {
         "id": uuid.uuid4().hex[:8], "name": name, "status": "idle", "route": None, "assigned_at": None,
         "photo_url": None, "last_node_id": last_node_id, "idle_since": idle_since,
+        "vehicle_type": vehicle_type, "max_capacity_kg": max_capacity_kg,
     }
     conn.execute(
-        "INSERT INTO drivers (id, name, status, route_json, assigned_at, last_node_id, idle_since) "
-        "VALUES (?, ?, 'idle', NULL, NULL, ?, ?)",
-        (driver["id"], name, last_node_id, idle_since),
+        "INSERT INTO drivers (id, name, status, route_json, assigned_at, last_node_id, idle_since, "
+        "vehicle_type, max_capacity_kg) VALUES (?, ?, 'idle', NULL, NULL, ?, ?, ?, ?)",
+        (driver["id"], name, last_node_id, idle_since, vehicle_type, max_capacity_kg),
     )
     conn.commit()
     conn.close()
     return jsonify(driver), 201
+
+
+@app.route("/manager/drivers/<driver_id>/settings", methods=["POST"])
+def manager_update_driver_settings(driver_id):
+    body = request.get_json(silent=True) or {}
+    conn = get_db()
+    row = conn.execute("SELECT id FROM drivers WHERE id = ?", (driver_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return jsonify(error="Chofer no encontrado."), 404
+
+    updates, params = [], []
+    if "vehicle_type" in body:
+        vehicle_type = body.get("vehicle_type")
+        if vehicle_type not in VEHICLE_TYPES:
+            conn.close()
+            return jsonify(error="Tipo de vehículo inválido."), 400
+        updates.append("vehicle_type = ?")
+        params.append(vehicle_type)
+    if "max_capacity_kg" in body:
+        max_capacity_kg = body.get("max_capacity_kg")
+        if max_capacity_kg is not None:
+            try:
+                max_capacity_kg = float(max_capacity_kg)
+            except (TypeError, ValueError):
+                conn.close()
+                return jsonify(error="Capacidad inválida."), 400
+            if max_capacity_kg < 0:
+                conn.close()
+                return jsonify(error="Capacidad inválida."), 400
+        updates.append("max_capacity_kg = ?")
+        params.append(max_capacity_kg)
+
+    if not updates:
+        conn.close()
+        return jsonify(error="Nada que actualizar."), 400
+
+    params.append(driver_id)
+    conn.execute(f"UPDATE drivers SET {', '.join(updates)} WHERE id = ?", params)
+    conn.commit()
+    row = conn.execute("SELECT vehicle_type, max_capacity_kg FROM drivers WHERE id = ?", (driver_id,)).fetchone()
+    conn.close()
+    return jsonify({"id": driver_id, "vehicle_type": row["vehicle_type"], "max_capacity_kg": row["max_capacity_kg"]})
 
 
 @app.route("/manager/drivers/<driver_id>", methods=["DELETE"])
@@ -935,6 +1035,31 @@ def manager_dismiss_alert(alert_id):
     conn.commit()
     conn.close()
     return jsonify(_alerts_response())
+
+
+PHOTO_MIME_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
+
+
+@app.route("/manager/analyze-package", methods=["POST"])
+def manager_analyze_package():
+    file = request.files.get("photo")
+    if file is None or not file.filename:
+        return jsonify(error="No se recibió ninguna imagen."), 400
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_PHOTO_EXT:
+        return jsonify(error="Formato de imagen no permitido (usa png, jpg, jpeg, gif o webp)."), 400
+
+    image_b64 = base64.b64encode(file.read()).decode("ascii")
+    message = HumanMessage(content=[
+        {"type": "text", "text": PACKAGE_VISION_INSTRUCTIONS},
+        {"type": "image_url", "image_url": f"data:{PHOTO_MIME_TYPES[ext]};base64,{image_b64}"},
+    ])
+    try:
+        result = package_vision_llm.invoke([message])
+    except Exception as exc:  # error de LLM/parsing
+        return jsonify(error=f"No se pudo analizar la imagen: {exc}"), 502
+
+    return jsonify(descripcion=result.descripcion, vehiculo_minimo=result.vehiculo_minimo)
 
 
 @app.route("/manager/drivers/<driver_id>/photo", methods=["POST"])

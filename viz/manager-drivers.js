@@ -8,6 +8,9 @@ var driverPhotoInput = document.getElementById("driver-photo-input");
 function refreshDriverList() {
   driverList.innerHTML = "";
   drivers.forEach(function (d) {
+    var card = document.createElement("div");
+    card.className = "driver-card";
+
     var row = document.createElement("div");
     row.className = "node-list-item";
 
@@ -30,26 +33,87 @@ function refreshDriverList() {
     var dot = document.createElement("span");
     dot.className = "dot " + (d.status === "en_ruta" ? "dot-enroute" : "dot-idle");
     label.appendChild(dot);
-    label.appendChild(document.createTextNode(" " + d.name + " — " + (d.status === "en_ruta" ? "En ruta" : "Libre")));
+    label.appendChild(document.createTextNode(
+      " " + (VEHICLE_ICONS[d.vehicle_type] || "🚗") + " " + d.name + " — " + (d.status === "en_ruta" ? "En ruta" : "Libre")
+    ));
     row.appendChild(label);
 
     var phoneBtn = document.createElement("button");
-    phoneBtn.className = "btn-secondary";
-    phoneBtn.textContent = "📱 Ver celular";
-    phoneBtn.style.marginBottom = "0";
+    phoneBtn.className = "btn-secondary btn-icon-only";
+    phoneBtn.textContent = "📱";
+    phoneBtn.title = "Ver celular";
+    phoneBtn.setAttribute("aria-label", "Ver celular");
     phoneBtn.addEventListener("click", function () { window.open("driver.html?driver=" + d.id, "_blank"); });
     row.appendChild(phoneBtn);
 
     if (d.status === "idle") {
       var btn = document.createElement("button");
-      btn.className = "btn-secondary";
-      btn.textContent = "Eliminar";
-      btn.style.marginBottom = "0";
+      btn.className = "btn-secondary btn-icon-only";
+      btn.textContent = "🗑️";
+      btn.title = "Eliminar chofer";
+      btn.setAttribute("aria-label", "Eliminar chofer");
       btn.addEventListener("click", function () { deleteDriver(d.id); });
       row.appendChild(btn);
     }
-    driverList.appendChild(row);
+    card.appendChild(row);
+
+    // segunda línea: tipo de vehículo y capacidad, editables en cualquier momento (sin
+    // tener que borrar y recrear al chofer) — cada control se guarda solo al cambiar
+    var settingsRow = document.createElement("div");
+    settingsRow.className = "driver-settings-row";
+
+    var vehicleSelect = document.createElement("select");
+    vehicleSelect.className = "driver-vehicle-select";
+    vehicleSelect.title = "Tipo de vehículo";
+    Object.keys(VEHICLE_LABELS).forEach(function (vt) {
+      var opt = document.createElement("option");
+      opt.value = vt;
+      opt.textContent = VEHICLE_ICONS[vt] + " " + VEHICLE_LABELS[vt];
+      if (vt === d.vehicle_type) opt.selected = true;
+      vehicleSelect.appendChild(opt);
+    });
+    vehicleSelect.addEventListener("change", function () {
+      updateDriverSettings(d.id, { vehicle_type: vehicleSelect.value });
+    });
+    settingsRow.appendChild(vehicleSelect);
+
+    var capacityInput = document.createElement("input");
+    capacityInput.type = "number";
+    capacityInput.min = "0";
+    capacityInput.placeholder = "Capacidad (kg)";
+    capacityInput.title = "Capacidad máxima de carga (informativa)";
+    capacityInput.className = "driver-capacity-input";
+    if (d.max_capacity_kg !== null && d.max_capacity_kg !== undefined) capacityInput.value = d.max_capacity_kg;
+    function commitCapacity() {
+      var raw = capacityInput.value.trim();
+      var val = raw === "" ? null : Number(raw);
+      if (val !== null && (isNaN(val) || val < 0)) {
+        capacityInput.value = (d.max_capacity_kg !== null && d.max_capacity_kg !== undefined) ? d.max_capacity_kg : "";
+        return;
+      }
+      updateDriverSettings(d.id, { max_capacity_kg: val });
+    }
+    capacityInput.addEventListener("blur", commitCapacity);
+    capacityInput.addEventListener("keydown", function (e) { if (e.key === "Enter") capacityInput.blur(); });
+    settingsRow.appendChild(capacityInput);
+
+    card.appendChild(settingsRow);
+    driverList.appendChild(card);
   });
+}
+
+function updateDriverSettings(driverId, patch) {
+  api("POST", "/manager/drivers/" + driverId + "/settings", patch).then(function (r) {
+    if (!r.ok) { alert(r.data.error || "No se pudo actualizar el chofer."); refreshDriverList(); return; }
+    var merged = updateLocalDriver(r.data);
+    // el marcador del mapa (paseando o en viaje, es el mismo dict driverMarkers en ambos casos)
+    // no se recrea solo porque cambió el vehículo — hay que refrescarle el ícono a mano
+    if (patch.vehicle_type && driverMarkers[driverId]) {
+      driverMarkers[driverId].setIcon(L.divIcon({
+        className: "driver-marker", html: VEHICLE_ICONS[merged.vehicle_type] || "🚚", iconSize: null,
+      }));
+    }
+  }).catch(function () { alert("No se pudo conectar con el backend (¿está corriendo en :5000?)."); });
 }
 
 driverPhotoInput.addEventListener("change", function () {
@@ -75,13 +139,20 @@ function updateLocalDriver(updated) {
   return idx !== -1 ? drivers[idx] : updated;
 }
 
+var driverVehicleInput = document.getElementById("driver-vehicle-input");
+var driverCapacityInput = document.getElementById("driver-capacity-input");
+
 document.getElementById("btn-add-driver").addEventListener("click", function () {
   var name = driverNameInput.value.trim();
   if (!name) return;
-  api("POST", "/manager/drivers", { name: name }).then(function (r) {
+  var body = { name: name, vehicle_type: driverVehicleInput.value };
+  var capacity = driverCapacityInput.value.trim();
+  if (capacity !== "") body.max_capacity_kg = Number(capacity);
+  api("POST", "/manager/drivers", body).then(function (r) {
     if (!r.ok) { alert(r.data.error || "No se pudo agregar el chofer."); return; }
     drivers.push(r.data);
     driverNameInput.value = "";
+    driverCapacityInput.value = "";
     refreshDriverList();
     driverWanderAnchorSeen[r.data.id] = r.data.idle_since;
     startDriverWander(r.data);
@@ -232,7 +303,8 @@ function startDriverWander(driver) {
     var pos = wanderPositionNow(driver);
     if (!pos) return;
     if (!driverMarkers[driver.id]) {
-      var marker = L.marker(pos, { icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }) }).addTo(map);
+      var icon = VEHICLE_ICONS[driver.vehicle_type] || "🚚";
+      var marker = L.marker(pos, { icon: L.divIcon({ className: "driver-marker", html: icon, iconSize: null }) }).addTo(map);
       marker.bindTooltip(driver.name + " (libre)", { direction: "top", offset: [0, -10] });
       marker.on("click", function () { openDriverDetail(driver.id); });
       driverMarkers[driver.id] = marker;

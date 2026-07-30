@@ -213,7 +213,8 @@ function startDriverSimulation(driver) {
   if (driverMarkers[driver.id]) { map.removeLayer(driverMarkers[driver.id]); delete driverMarkers[driver.id]; }
 
   function placeTruckAt(pos) {
-    var marker = L.marker(pos, { icon: L.divIcon({ className: "driver-marker", html: "🚚", iconSize: null }) }).addTo(map);
+    var icon = VEHICLE_ICONS[driver.vehicle_type] || "🚚";
+    var marker = L.marker(pos, { icon: L.divIcon({ className: "driver-marker", html: icon, iconSize: null }) }).addTo(map);
     marker.bindTooltip(driver.name, { direction: "top", offset: [0, -10] });
     marker.on("click", function () { openDriverDetail(driver.id); });
     driverMarkers[driver.id] = marker;

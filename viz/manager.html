@@ -63,14 +63,21 @@
     <h2>Ruta óptima</h2>
     <div id="route-summary-body"></div>
     <div class="field">
+      <div id="package-photo-drop">📦 Agregar foto del paquete</div>
+      <input type="file" id="package-photo-input" accept="image/*" style="display:none;">
+      <div id="package-analysis-result" style="display:none;"></div>
+    </div>
+
+    <div class="field">
       <label>Asignar a chofer</label>
       <select id="driver-select"></select>
+      <div id="driver-select-hint" style="display:none;"></div>
     </div>
     <button id="btn-assign-route" class="btn-primary btn-block">Asignar ruta</button>
   </div>
 
   <div class="field">
-    <label><input type="checkbox" id="peak-toggle"> Modo hora pico (ruta óptima por tiempo, evita nodos con tráfico alto)</label>
+    <label><input type="checkbox" id="peak-toggle"> Modo hora pico (evita nodos con tráfico alto)</label>
   </div>
 
   <div class="legend">
@@ -99,6 +106,13 @@
   <div id="drivers-body">
     <div class="field-group">
       <input type="text" id="driver-name-input" placeholder="Nombre del chofer">
+      <select id="driver-vehicle-input" title="Tipo de vehículo">
+        <option value="moto">🏍️ Moto</option>
+        <option value="auto" selected>🚗 Auto</option>
+        <option value="noa">🚐 Furgoneta (Noah)</option>
+        <option value="camion">🚚 Camión</option>
+      </select>
+      <input type="number" id="driver-capacity-input" min="0" placeholder="Capacidad (kg)">
       <button id="btn-add-driver" class="btn-primary">Agregar</button>
     </div>
     <div id="driver-list"></div>
