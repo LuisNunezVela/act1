@@ -28,11 +28,6 @@
   <div id="status-box">Elige una acción: fijar almacén, tráfico, bloquear una calle o armar una ruta.</div>
 
   <div class="field">
-    <label>Opacidad del mapa: <span id="map-opacity-value">100</span>%</label>
-    <input type="range" id="map-opacity-slider" min="10" max="100" step="5" value="100">
-  </div>
-
-  <div class="field">
     <label>Almacén</label>
     <div id="warehouse-label" class="node-chip">—</div>
   </div>
@@ -149,6 +144,11 @@
 </div>
 
 <div id="arrival-toast-stack"></div>
+
+<div id="map-opacity-panel">
+  <label for="map-opacity-slider">Opacidad del mapa: <span id="map-opacity-value">100</span>%</label>
+  <input type="range" id="map-opacity-slider" min="10" max="100" step="5" value="100">
+</div>
 
 <div id="sim-speed-panel">
   <label for="sim-speed-slider">Velocidad simulación: <span id="sim-speed-value">1x</span></label>

@@ -881,10 +881,10 @@ code {
 .arrival-flag { font-size: 20px; }
 
 /* --- panel de eventos, estilo "CRPG combat log", persistente vía backend --- */
+#map-opacity-panel,
 #sim-speed-panel {
   position: fixed;
   bottom: 16px;
-  right: 632px;
   z-index: 1050;
   width: 200px;
   background: rgba(15, 20, 40, 0.92);
@@ -894,6 +894,10 @@ code {
   padding: 10px 14px;
 }
 
+#sim-speed-panel { right: 632px; }
+#map-opacity-panel { right: 848px; } /* 632 + 200 de ancho de sim-speed-panel + 16 de separación */
+
+#map-opacity-panel label,
 #sim-speed-panel label {
   display: block;
   margin-bottom: 6px;
@@ -904,12 +908,14 @@ code {
   color: #9fb0d8;
 }
 
+#map-opacity-panel input[type="range"],
 #sim-speed-panel input[type="range"] {
   width: 100%;
 }
 
-@media (max-width: 1400px) {
-  #sim-speed-panel { display: none; } /* se solaparía con el panel de eventos en pantallas angostas */
+@media (max-width: 1650px) {
+  /* se solaparían entre sí y con el panel de eventos en pantallas angostas */
+  #map-opacity-panel, #sim-speed-panel { display: none; }
 }
 
 #event-log-panel {
