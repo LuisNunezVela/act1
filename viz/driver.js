@@ -143,6 +143,28 @@
     return { before: points.slice(0, points.length - 1), point: points[points.length - 1], after: [] };
   }
 
+  // arma los hops del tramo de recogida: si el chofer fue asignado a mitad de un hop de su
+  // paseo (pickup_partial_from/to), el primer hop es el REMANENTE de esa calle desde su
+  // posición exacta (pickup_partial_start_dist_m) en vez de arrancar del nodo más cercano —
+  // así la animación empieza justo donde estaba, sin "teletransportarse" al nodo.
+  function buildPickupHops(route, peakOn) {
+    var hops = [];
+    if (route.pickup_partial_from && route.pickup_partial_to) {
+      var edge = edgesByPair[route.pickup_partial_from + "|" + route.pickup_partial_to];
+      if (edge) {
+        var split = splitHopAtDistance(pointsBetween(route.pickup_partial_from, route.pickup_partial_to), route.pickup_partial_start_dist_m || 0);
+        var remainingDist = Math.max(0, edge.weight - (route.pickup_partial_start_dist_m || 0));
+        var remainingTime = edge.weight === 0 ? 0 : edgeTimeSeconds(edge, peakOn) * (remainingDist / edge.weight);
+        hops.push({
+          from: route.pickup_partial_from, to: route.pickup_partial_to,
+          points: [split.point].concat(split.after),
+          distance_m: remainingDist, time_s: remainingTime,
+        });
+      }
+    }
+    return hops.concat(buildHopsFromNodePath(route.pickup_node_path, peakOn));
+  }
+
   function appendHopPoints(target, points, skipFirst) {
     for (var i = skipFirst ? 1 : 0; i < points.length; i++) target.push(points[i]);
   }
@@ -286,6 +308,31 @@
     lastTruckBearing = 0;
   }
 
+  // ---------- formato de distancia/tiempo restante ----------
+
+  function fmtMeters(m) { return m >= 1000 ? (m / 1000).toFixed(2) + " km" : Math.round(m) + " m"; }
+  function fmtDuration(s) {
+    s = Math.max(0, Math.round(s));
+    return s < 60 ? s + " s" : Math.round(s / 60) + " min";
+  }
+
+  function remainingMeters(hopBounds, totalDistanceM, elapsed) {
+    var traveled = 0;
+    for (var i = 0; i < hopBounds.length; i++) {
+      var hb = hopBounds[i];
+      if (elapsed >= hb.end) {
+        traveled += hb.hop.distance_m;
+      } else if (elapsed > hb.start) {
+        var t = hb.hop.time_s === 0 ? 0 : (elapsed - hb.start) / hb.hop.time_s;
+        traveled += t * hb.hop.distance_m;
+        break;
+      } else {
+        break;
+      }
+    }
+    return Math.max(0, totalDistanceM - traveled);
+  }
+
   // ---------- banner de confirmación ----------
 
   var bannerEl = document.getElementById("phone-alert-banner");
@@ -300,6 +347,7 @@
   // ---------- estado del chofer trackeado ----------
 
   var statusEl = document.getElementById("phone-status");
+  var etaEl = document.getElementById("phone-eta");
   var driverSelect = document.getElementById("driver-select");
 
   var currentDriverId = null;
@@ -308,10 +356,24 @@
   var trackedAssignedAt = null;
   var simTimer = null;
   var arrivalTimer = null;
+  var etaTimer = null;
 
   function clearSimTimers() {
     if (simTimer) { clearInterval(simTimer); simTimer = null; }
     if (arrivalTimer) { clearTimeout(arrivalTimer); arrivalTimer = null; }
+    if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
+  }
+
+  // cuenta regresiva en tiempo real para las esperas fijas (recogiendo pedido / descargando),
+  // que no tienen un simTimer propio moviendo al camión de fondo
+  function startCountdownEta(label, remainingSecondsFn) {
+    if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
+    function tick() {
+      var rem = remainingSecondsFn();
+      etaEl.textContent = rem > 0 ? (label + fmtDuration(rem)) : "";
+    }
+    tick();
+    etaTimer = setInterval(tick, 1000);
   }
 
   function stopTracking(statusText) {
@@ -320,6 +382,7 @@
     currentHops = null;
     trackedAssignedAt = null;
     statusEl.textContent = statusText || "Sin ruta asignada";
+    etaEl.textContent = "";
   }
 
   function finalizeArrival(driver) {
@@ -343,7 +406,7 @@
     clearRouteVisuals();
 
     var peakOn = driver.route.peak_hour;
-    var pickupHops = buildHopsFromNodePath(driver.route.pickup_node_path, peakOn);
+    var pickupHops = buildPickupHops(driver.route, peakOn);
     var deliveryHops = buildHopsFromNodePath(driver.route.node_path, peakOn);
     if (pickupHops.length === 0 && deliveryHops.length === 0) return;
 
@@ -354,6 +417,8 @@
     }
     var pickup = withBounds(pickupHops);
     var delivery = withBounds(deliveryHops);
+    pickup.totalDistanceM = pickup.hops.reduce(function (s, h) { return s + h.distance_m; }, 0);
+    delivery.totalDistanceM = delivery.hops.reduce(function (s, h) { return s + h.distance_m; }, 0);
     currentHops = pickup.hops.length ? pickup.hops : delivery.hops;
 
     routeLine.setLatLngs(
@@ -385,6 +450,7 @@
       flagMarker = arrivalFlagAt(destPoint);
       updateTrail(delivery.hops, delivery.bounds, delivery.totalSimTime, delivery.totalSimTime);
       statusEl.textContent = "Entregado";
+      etaEl.textContent = "";
       finalizeArrival(driver);
       return;
     }
@@ -395,6 +461,7 @@
       updateTrail(delivery.hops, delivery.bounds, delivery.totalSimTime, delivery.totalSimTime);
       flagMarker = arrivalFlagAt(destPoint);
       statusEl.textContent = "Descargando…";
+      startCountdownEta("Termina en ", function () { return T4 - (Date.now() - assignedAtMs) / 1000; });
       arrivalTimer = setTimeout(function () { finalizeArrival(driver); }, (T4 - realElapsedSinceAssign) * 1000);
       return;
     }
@@ -408,6 +475,9 @@
       if (!truckMarker) placeTruck(pos, initialBearing(delivery.hops)); else moveTruckTo(pos);
       updateTrail(delivery.hops, delivery.bounds, delivery.totalSimTime, elapsed);
       statusEl.textContent = "En ruta";
+      if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
+      etaEl.textContent = "Llega en " + fmtDuration((delivery.totalSimTime - elapsed) / SIM_SPEED_FACTOR) +
+        " · " + fmtMeters(remainingMeters(delivery.bounds, delivery.totalDistanceM, elapsed));
 
       simTimer = setInterval(function () {
         elapsed += (SIM_TICK_MS / 1000) * SIM_SPEED_FACTOR;
@@ -421,6 +491,8 @@
         }
         moveTruckTo(positionAtElapsed(delivery.hops, delivery.bounds, elapsed));
         updateTrail(delivery.hops, delivery.bounds, delivery.totalSimTime, elapsed);
+        etaEl.textContent = "Llega en " + fmtDuration((delivery.totalSimTime - elapsed) / SIM_SPEED_FACTOR) +
+          " · " + fmtMeters(remainingMeters(delivery.bounds, delivery.totalDistanceM, elapsed));
       }, SIM_TICK_MS);
 
       arrivalTimer = setTimeout(function () {
@@ -429,6 +501,7 @@
         if (simTimer) { clearInterval(simTimer); simTimer = null; }
         flagMarker = arrivalFlagAt(destPoint);
         statusEl.textContent = "Descargando…";
+        startCountdownEta("Termina en ", function () { return T4 - (Date.now() - assignedAtMs) / 1000; });
         arrivalTimer = setTimeout(function () { finalizeArrival(driver); }, UNLOAD_WAIT_S * 1000);
       }, (deliveryTripRealSeconds - realElapsedIntoPhase) * 1000);
     }
@@ -444,6 +517,7 @@
       flagMarker = arrivalFlagAt(warehousePoint);
       statusEl.textContent = "Recogiendo pedido…";
       showPhoneBanner("Llegaste al almacén — recogiendo el pedido");
+      startCountdownEta("Sale en ", function () { return T2 - (Date.now() - assignedAtMs) / 1000; });
       arrivalTimer = setTimeout(function () {
         if (flagMarker) { map.removeLayer(flagMarker); flagMarker = null; }
         startDeliveringPhase(0);
@@ -457,6 +531,8 @@
     placeTruck(positionAtElapsed(pickup.hops, pickup.bounds, elapsedPickup), initialBearing(pickup.hops));
     updateTrail(pickup.hops, pickup.bounds, pickup.totalSimTime, elapsedPickup);
     statusEl.textContent = "Yendo a recoger el pedido…";
+    etaEl.textContent = "Recoge en " + fmtDuration((pickup.totalSimTime - elapsedPickup) / SIM_SPEED_FACTOR) +
+      " · " + fmtMeters(remainingMeters(pickup.bounds, pickup.totalDistanceM, elapsedPickup));
 
     simTimer = setInterval(function () {
       elapsedPickup += (SIM_TICK_MS / 1000) * SIM_SPEED_FACTOR;
@@ -470,6 +546,8 @@
       }
       moveTruckTo(positionAtElapsed(pickup.hops, pickup.bounds, elapsedPickup));
       updateTrail(pickup.hops, pickup.bounds, pickup.totalSimTime, elapsedPickup);
+      etaEl.textContent = "Recoge en " + fmtDuration((pickup.totalSimTime - elapsedPickup) / SIM_SPEED_FACTOR) +
+        " · " + fmtMeters(remainingMeters(pickup.bounds, pickup.totalDistanceM, elapsedPickup));
     }, SIM_TICK_MS);
 
     arrivalTimer = setTimeout(function () {
@@ -479,6 +557,7 @@
       flagMarker = arrivalFlagAt(warehousePoint);
       statusEl.textContent = "Recogiendo pedido…";
       showPhoneBanner("Llegaste al almacén — recogiendo el pedido");
+      startCountdownEta("Sale en ", function () { return T2 - (Date.now() - assignedAtMs) / 1000; });
       arrivalTimer = setTimeout(function () {
         if (flagMarker) { map.removeLayer(flagMarker); flagMarker = null; }
         startDeliveringPhase(0);

@@ -729,6 +729,11 @@ def manager_assign_route(driver_id):
         "pickup_polyline": body["pickup_polyline"],
         "pickup_distance_m": body["pickup_distance_m"],
         "pickup_time_s": body["pickup_time_s"],
+        # hop parcial desde la posición EXACTA del chofer (a mitad de una calle mientras
+        # paseaba) hasta el primer nodo de pickup_node_path; None si ya estaba justo en un nodo
+        "pickup_partial_from": body.get("pickup_partial_from"),
+        "pickup_partial_to": body.get("pickup_partial_to"),
+        "pickup_partial_start_dist_m": body.get("pickup_partial_start_dist_m", 0),
         "assigned_at": assigned_at,
     }
     conn.execute(

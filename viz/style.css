@@ -651,13 +651,6 @@ code {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
 }
 
-.driver-marker-idle {
-  font-size: 18px;
-  line-height: 1;
-  opacity: 0.6;
-  filter: grayscale(0.4) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
-}
-
 .road-alert-marker {
   font-size: 22px;
   line-height: 1;
@@ -806,6 +799,37 @@ code {
 .arrival-flag { font-size: 20px; }
 
 /* --- panel de eventos, estilo "CRPG combat log", persistente vía backend --- */
+#sim-speed-panel {
+  position: fixed;
+  bottom: 16px;
+  right: 632px;
+  z-index: 1050;
+  width: 200px;
+  background: rgba(15, 20, 40, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  padding: 10px 14px;
+}
+
+#sim-speed-panel label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #9fb0d8;
+}
+
+#sim-speed-panel input[type="range"] {
+  width: 100%;
+}
+
+@media (max-width: 1400px) {
+  #sim-speed-panel { display: none; } /* se solaparía con el panel de eventos en pantallas angostas */
+}
+
 #event-log-panel {
   position: fixed;
   bottom: 16px;
@@ -1025,8 +1049,21 @@ code {
   border: 1px solid var(--border);
 }
 
+#phone-status-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.3;
+}
+
 #phone-status {
   font-size: 13px;
+  white-space: nowrap;
+}
+
+#phone-eta {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.7);
   white-space: nowrap;
 }
 

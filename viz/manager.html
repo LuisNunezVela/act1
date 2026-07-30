@@ -103,7 +103,7 @@
     </div>
     <div id="driver-list"></div>
     <div class="legend">
-      <div class="legend-item"><span class="dot dot-idle"></span> Inactivo</div>
+      <div class="legend-item"><span class="dot dot-idle"></span> Libre</div>
       <div class="legend-item"><span class="dot dot-enroute"></span> En ruta</div>
     </div>
     <input type="file" id="driver-photo-input" accept="image/*" style="display:none;">
@@ -136,6 +136,11 @@
 
 <div id="arrival-toast-stack"></div>
 
+<div id="sim-speed-panel">
+  <label for="sim-speed-slider">Velocidad simulación: <span id="sim-speed-value">1x</span></label>
+  <input type="range" id="sim-speed-slider" min="1" max="20" step="1" value="1">
+</div>
+
 <div id="event-log-panel">
   <div id="event-log-header">
     <span id="event-log-title">📜 Registro de eventos</span>
@@ -164,6 +169,28 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
   integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="graph_data.js"></script>
-<script src="manager.js"></script>
+<script>
+// manager.js se dividió por feature (ver viz/manager-*.js) para que sea más fácil ubicar
+// dónde editar cada cosa; se cargan con document.write en el punto exacto de este <script>
+// para preservar el orden estricto de ejecución del que dependen (comparten variables/funciones
+// de nivel superior entre sí, igual que antes cuando era un solo archivo).
+if (typeof GRAPH_DATA === "undefined" || !GRAPH_DATA.nodes || GRAPH_DATA.nodes.length === 0) {
+  document.getElementById("panel").innerHTML =
+    '<h1>Gestor de reparto</h1><p class="subtitle">Todavía no hay un grafo generado.</p>' +
+    '<p class="hint">Genera el grafo primero desde <code>editor.html</code> y el notebook.</p>';
+} else {
+  [
+    "manager-core.js",       // constantes, geometría, adyacencia/Dijkstra, tráfico, bloqueos
+    "manager-map-state.js",  // mapa, DOM/estado, fetch helper, almacén, tráfico, vías bloqueadas, alertas
+    "manager-routes.js",     // construcción/finalización/asignación de rutas
+    "manager-chat.js",       // bot de IA (chat)
+    "manager-drivers.js",    // choferes: alta/baja/lista, paseo idle
+    "manager-trip-sim.js",   // simulación de viajes (5 fases) + panel de detalle del chofer
+    "manager-init.js",       // polling, arranque, debug hook
+  ].forEach(function (src) {
+    document.write('<scr' + 'ipt src="' + src + '"></scr' + 'ipt>');
+  });
+}
+</script>
 </body>
 </html>
