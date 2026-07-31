@@ -388,14 +388,20 @@ input[type="text"], input[type="tel"] {
   justify-content: space-between;
 }
 
-#chat-minimize-btn {
+#chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+#chat-minimize-btn, #chat-clear-btn {
   background: transparent;
   color: white;
   padding: 2px 8px;
   font-size: 16px;
 }
 
-#chat-minimize-btn:hover { background: rgba(255, 255, 255, 0.15); }
+#chat-minimize-btn:hover, #chat-clear-btn:hover { background: rgba(255, 255, 255, 0.15); }
 
 #chat-messages {
   flex: 1;
@@ -436,6 +442,14 @@ input[type="text"], input[type="tel"] {
   color: var(--text);
   border: 1px solid var(--border);
 }
+
+.chat-msg-photo-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-photo-btn { margin-bottom: 0; }
 
 .chat-msg-status {
   font-style: italic;

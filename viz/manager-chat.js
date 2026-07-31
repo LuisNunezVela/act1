@@ -9,18 +9,102 @@ chatToggleBtn.addEventListener("click", function () {
 });
 chatMinimizeBtn.addEventListener("click", closeChat);
 
-function addChatMessage(text, extraClass) {
+// ---------- historial persistente (localStorage, así sobrevive a cambiar de pestaña o
+// recargar la página — antes se perdía porque solo vivía en memoria del script) ----------
+
+var CHAT_HISTORY_KEY = "easyroute_chat_history_v1";
+
+function loadStoredChatHistory() {
+  try {
+    var raw = localStorage.getItem(CHAT_HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveStoredChatHistory() {
+  try { localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(chatHistory)); } catch (e) { /* localStorage lleno o deshabilitado: no es crítico, solo no persiste */ }
+}
+
+var chatHistory = loadStoredChatHistory();
+
+function clearChatHistory() {
+  chatHistory = [];
+  saveStoredChatHistory();
+  chatMessages.innerHTML = "";
+}
+
+chatClearBtn.addEventListener("click", clearChatHistory);
+
+function addChatMessage(text, extraClass, skipPersist) {
   var div = document.createElement("div");
   div.className = "chat-msg " + extraClass;
   div.textContent = text;
   chatMessages.appendChild(div);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+  // los mensajes de estado transitorio ("Pensando…") no se guardan — se reemplazan en el
+  // momento por la respuesta final vía setChatBotMessage, que sí persiste
+  if (!skipPersist && extraClass.indexOf("chat-msg-status") === -1) {
+    chatHistory.push({ text: text, cls: extraClass });
+    saveStoredChatHistory();
+  }
   return div;
 }
 
 function setChatBotMessage(el, text, kind) {
+  var extraClass = "chat-msg-bot" + (kind === "error" ? " chat-msg-error" : kind === "status" ? " chat-msg-status" : "");
   el.textContent = text;
-  el.className = "chat-msg chat-msg-bot" + (kind === "error" ? " chat-msg-error" : kind === "status" ? " chat-msg-status" : "");
+  el.className = "chat-msg " + extraClass;
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  if (kind !== "status") {
+    chatHistory.push({ text: text, cls: extraClass });
+    saveStoredChatHistory();
+  }
+}
+
+// repone el historial guardado al abrir/recargar la página (con skipPersist para no
+// volver a guardar lo que ya estaba guardado)
+chatHistory.forEach(function (m) { addChatMessage(m.text, m.cls, true); });
+
+// tras un despacho hecho por chat/voz (sin la foto+IA del panel manual) se ofrece
+// agregar una foto del encargo directamente en la burbuja del chat, para que también
+// quede guardada en el Historial del viaje
+function addChatPhotoPrompt(tripId) {
+  var div = document.createElement("div");
+  div.className = "chat-msg chat-msg-bot chat-msg-photo-prompt";
+
+  var label = document.createElement("div");
+  label.textContent = "📦 ¿Le agregamos una foto del encargo a este viaje?";
+  div.appendChild(label);
+
+  var btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn-secondary btn-block chat-photo-btn";
+  btn.textContent = "📷 Subir foto";
+  div.appendChild(btn);
+
+  var fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = "image/*";
+  fileInput.style.display = "none";
+  div.appendChild(fileInput);
+
+  btn.addEventListener("click", function () { fileInput.click(); });
+  fileInput.addEventListener("change", function () {
+    var file = fileInput.files[0];
+    if (!file) return;
+    btn.disabled = true;
+    btn.textContent = "Subiendo…";
+    var formData = new FormData();
+    formData.append("photo", file);
+    fetch(BACKEND + "/manager/trips/" + tripId + "/photo", { method: "POST", body: formData })
+      .then(function (res) { label.textContent = res.ok ? "📦 Foto agregada al viaje ✅" : "📦 No se pudo subir la foto."; })
+      .catch(function () { label.textContent = "📦 No se pudo conectar con el backend para subir la foto."; })
+      .finally(function () { btn.remove(); fileInput.remove(); });
+  });
+
+  chatMessages.appendChild(div);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
@@ -93,7 +177,12 @@ function askManagerBot() {
       return { node_id: stopId, name: r.name, phone: r.phone };
     });
 
-    assignRoute(driverId, recipients); // reusa el flujo real: persiste, arranca simulación, log, toast
+    assignRoute(driverId, recipients, function (data) {
+      // reusa el flujo real: persiste, arranca simulación, log, toast — y como este
+      // despacho vino de voz/texto (sin pasar por el panel de foto+IA), se ofrece
+      // agregar la foto directamente en el chat
+      if (data.trip_id) addChatPhotoPrompt(data.trip_id);
+    });
 
     var orderNames = route2.stops.map(function (id) { return nodesById[id].name; });
     var recipientNames = recipients.filter(function (r) { return r.name; }).map(function (r) { return r.name; });

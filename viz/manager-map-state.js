@@ -188,6 +188,7 @@ var eventLogBody = document.getElementById("event-log-body");
 var chatWidget = document.getElementById("chat-widget");
 var chatToggleBtn = document.getElementById("chat-toggle-btn");
 var chatMinimizeBtn = document.getElementById("chat-minimize-btn");
+var chatClearBtn = document.getElementById("chat-clear-btn");
 var chatMessages = document.getElementById("chat-messages");
 var askInput = document.getElementById("ask-input");
 var btnAsk = document.getElementById("btn-ask");

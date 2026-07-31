@@ -284,7 +284,7 @@ function computePickupLeg(driver, peakOn) {
   };
 }
 
-function assignRoute(driverId, recipients) {
+function assignRoute(driverId, recipients, onAssigned) {
   var driver = drivers.filter(function (d) { return d.id === driverId; })[0];
   if (!driver) { alert("Chofer no encontrado."); return; }
   var pickupLeg = computePickupLeg(driver, currentRouteDraft.peak_hour);
@@ -323,6 +323,7 @@ function assignRoute(driverId, recipients) {
     resetPackagePhotoWidget();
     recipientsFieldsEl.innerHTML = "";
     setMode("none");
+    if (onAssigned) onAssigned(r.data);
   }).catch(function () { alert("No se pudo conectar con el backend (¿está corriendo en :5000?)."); });
 }
 
