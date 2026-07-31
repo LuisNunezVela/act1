@@ -262,6 +262,12 @@ function assignRoute(driverId) {
     startDriverSimulation(merged);
     driverRouteAssignedAt[merged.id] = merged.route.assigned_at;
     logEvent("🚚", merged.name + " inició un viaje (" + fmtMeters(merged.route.distance_m) + ", " + fmtDuration(merged.route.time_s) + ")");
+    if (r.data.trip_id && lastAnalyzedPackagePhoto) {
+      var tripFormData = new FormData();
+      tripFormData.append("photo", lastAnalyzedPackagePhoto);
+      fetch(BACKEND + "/manager/trips/" + r.data.trip_id + "/photo", { method: "POST", body: tripFormData })
+        .catch(function () { /* la ruta ya se asignó bien; la foto del historial es secundaria */ });
+    }
     routeDraftStops = [];
     currentRouteDraft = null;
     renderRouteDraftChips();
@@ -278,6 +284,7 @@ function assignRoute(driverId) {
 var packagePhotoDrop = document.getElementById("package-photo-drop");
 var packagePhotoInput = document.getElementById("package-photo-input");
 var packageAnalysisResult = document.getElementById("package-analysis-result");
+var lastAnalyzedPackagePhoto = null; // File subido a la IA; se adjunta al viaje en Historial si se asigna
 
 function resetPackagePhotoWidget() {
   packagePhotoDrop.textContent = "📦 Agregar foto del paquete";
@@ -286,6 +293,7 @@ function resetPackagePhotoWidget() {
   packageAnalysisResult.textContent = "";
   packageAnalysisResult.classList.remove("error");
   driverSelectHint.style.display = "none";
+  lastAnalyzedPackagePhoto = null;
 }
 
 packagePhotoDrop.addEventListener("click", function () { packagePhotoInput.click(); });
@@ -294,6 +302,7 @@ packagePhotoInput.addEventListener("change", function () {
   var file = packagePhotoInput.files[0];
   packagePhotoInput.value = "";
   if (!file || !currentRouteDraft) return;
+  lastAnalyzedPackagePhoto = file;
 
   packagePhotoDrop.textContent = "📦 Analizando foto…";
   packageAnalysisResult.style.display = "none";

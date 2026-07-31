@@ -1,6 +1,8 @@
 # Manual de uso — EasyRoute
 
-Aplicación para modelar el problema de reparto en Santa Cruz como grafo y comparar los algoritmos BFS y DFS. Al abrir index.html aparece un menú principal con dos opciones: 🔎 Buscar ruta (demo.html) y ✏️ Editar mapa (editor.html). Desde cualquiera de esas dos páginas se puede volver al menú o cambiar de página con los botones 🏠 Menú / 🔎 Buscar ruta / ✏️ Editor ubicados debajo del panel izquierdo.
+Aplicación para modelar el problema de reparto en Santa Cruz como grafo. Al abrir index.html aparece un menú principal con las opciones: ✏️ Editar mapa (editor.html), 🚚 Gestor de reparto (manager.html) y 🕒 Historial (history.html). Desde cualquiera de esas páginas se puede volver al menú o cambiar de página con los botones ubicados debajo del panel izquierdo.
+
+Nota: esta documentación no cubre todavía el Gestor de reparto completo (choferes, vehículos, simulación, IA) ni el Historial — quedó desactualizada durante el desarrollo. La sección "3. demo.html" de abajo describe una función (comparador BFS/DFS) que ya fue eliminada de la app.
 
 ## 1. editor.html — Construcción del grafo
 

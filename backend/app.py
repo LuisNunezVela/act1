@@ -1,19 +1,12 @@
 """Backend LangChain para EasyRoute.
 
-Expone dos endpoints:
-- POST /preguntar: recibe una pregunta en lenguaje natural sobre una ruta
-  ("quiero la ruta más rápida del nodo 34 al nodo 45") y devuelve los IDs
-  de nodo de origen/destino del grafo ya generado por el notebook, para que
-  el frontend dispare la comparación BFS vs DFS existente sobre esos nodos.
-- POST /responder: recibe la pregunta original más las métricas BFS/DFS ya
-  calculadas por el frontend, y devuelve una explicación en lenguaje natural
-  comparando ambos algoritmos para esa ruta específica.
-
-No calcula rutas ni costos aquí: eso ya lo hace viz/app.js con bfs()/dfs().
-Este backend solo interpreta el lenguaje natural, valida los nodos, y
-redacta la respuesta conversacional con los números que le pasa el frontend.
+Backend del Gestor de reparto (viz/manager.html): chat en lenguaje natural para
+despachar choferes/consultar tiempos/clima, análisis de fotos de encargos con
+Gemini (visión), y persistencia (SQLite) de almacén, choferes, rutas, tráfico,
+vías bloqueadas, historial de viajes y el registro de eventos.
 """
 import base64
+import hashlib
 import re
 import json
 import sqlite3
@@ -57,10 +50,17 @@ EDGE_PAIRS = set()
 for _edge in json.loads(DATA_PATH.read_text(encoding="utf-8"))["edges"]:
     EDGE_PAIRS.add(frozenset({_edge["source"], _edge["target"]}))
 
+# huella del grafo actual: si el editor+notebook regeneran graph_export.json con otros
+# nodos/aristas, este hash cambia y el contador de nodos más pedidos (Historial > Reportes)
+# se reinicia la próxima vez que arranque el backend (ver init_db)
+GRAPH_FINGERPRINT = hashlib.sha256(DATA_PATH.read_bytes()).hexdigest()
+
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "manager_state.db"
 
 PHOTOS_DIR = Path(__file__).resolve().parent.parent / "data" / "driver_photos"
 PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+PACKAGE_PHOTOS_DIR = Path(__file__).resolve().parent.parent / "data" / "package_photos"
+PACKAGE_PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_PHOTO_EXT = {"png", "jpg", "jpeg", "gif", "webp"}
 
 
@@ -112,6 +112,28 @@ def init_db() -> None:
             created_at TEXT NOT NULL,
             dismissed INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS trips (
+            id TEXT PRIMARY KEY,
+            driver_id TEXT NOT NULL,
+            driver_name TEXT NOT NULL,
+            vehicle_type TEXT NOT NULL,
+            stops TEXT NOT NULL,
+            node_path TEXT NOT NULL,
+            distance_m REAL NOT NULL,
+            time_s REAL NOT NULL,
+            assigned_at TEXT NOT NULL,
+            completed_at TEXT,
+            photo_filename TEXT,
+            graph_fingerprint TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS node_selection_counts (
+            node_id TEXT PRIMARY KEY,
+            count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS graph_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            fingerprint TEXT
+        );
         """
     )
     driver_cols = {row["name"] for row in conn.execute("PRAGMA table_info(drivers)").fetchall()}
@@ -135,6 +157,19 @@ def init_db() -> None:
             "WHERE status = 'idle' AND last_node_id IS NULL",
             (warehouse_row["node_id"], datetime.now(timezone.utc).isoformat()),
         )
+
+    # si el grafo cambió desde la última vez que arrancó el backend (editor+notebook lo
+    # regeneraron), los node_id ya no representan los mismos lugares: reiniciar el
+    # contador de "nodos más pedidos" de Historial > Reportes. El historial de viajes en
+    # sí NO se borra (cada fila guarda su propio graph_fingerprint para saber si su
+    # mini-mapa sigue siendo válido).
+    meta_row = conn.execute("SELECT fingerprint FROM graph_meta WHERE id = 1").fetchone()
+    if meta_row is None or meta_row["fingerprint"] != GRAPH_FINGERPRINT:
+        conn.execute("DELETE FROM node_selection_counts")
+        conn.execute(
+            "INSERT OR REPLACE INTO graph_meta (id, fingerprint) VALUES (1, ?)", (GRAPH_FINGERPRINT,)
+        )
+
     conn.commit()
     conn.close()
 
@@ -294,51 +329,6 @@ def respond_ambiguous_nodes(query: str, mention: str, candidates: list):
     return jsonify(intent="aclaracion", respuesta=respuesta)
 
 
-class RouteQuery(BaseModel):
-    origen_numero: int = Field(
-        description="Número que acompaña a la palabra 'nodo' para el punto de origen mencionado en la pregunta."
-    )
-    destino_numero: int = Field(
-        description="Número que acompaña a la palabra 'nodo' para el punto de destino mencionado en la pregunta."
-    )
-
-
-prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "Interpretas preguntas sobre rutas en un grafo vial. Los nodos se "
-            "identifican como 'Nodo' seguido de un número (ej. 'Nodo 34'). "
-            "Extrae únicamente los números de nodo de origen y destino mencionados "
-            "en la pregunta del usuario. No inventes números que no estén presentes.",
-        ),
-        ("human", "{query}"),
-    ]
-)
-
-explain_prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "Eres el asistente de EasyRoute, una app que compara los algoritmos BFS y DFS "
-            "para encontrar rutas de reparto en Santa Cruz de la Sierra. Te dan la pregunta "
-            "original del usuario y las métricas ya calculadas de BFS y DFS para esa ruta. "
-            "Responde en español, en tono conversacional y breve (2 a 4 oraciones), diciendo "
-            "cuál algoritmo conviene para ese caso y por qué, usando exclusivamente los números "
-            "que te dan (no inventes cifras). No repitas la pregunta del usuario textualmente.",
-        ),
-        (
-            "human",
-            "Pregunta: {query}\n"
-            "Origen: {origen_nombre}. Destino: {destino_nombre}.\n"
-            "BFS -> nodos explorados: {bfs_nodos}, costo: {bfs_costo:.0f} m, "
-            "tiempo: {bfs_tiempo}, nodos en el camino: {bfs_pathlen}.\n"
-            "DFS -> nodos explorados: {dfs_nodos}, costo: {dfs_costo:.0f} m, "
-            "tiempo: {dfs_tiempo}, nodos en el camino: {dfs_pathlen}.",
-        ),
-    ]
-)
-
 class ManagerIntent(BaseModel):
     intent: Literal["consulta_tiempo", "despacho", "clima", "otro"] = Field(
         description="'consulta_tiempo' si pregunta cuánto tiempo/distancia toma llegar a un "
@@ -403,8 +393,6 @@ manager_confirm_prompt = ChatPromptTemplate.from_messages(
 )
 
 llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite")
-chain = prompt | llm.with_structured_output(RouteQuery)
-explain_chain = explain_prompt | llm | StrOutputParser()
 manager_intent_chain = manager_intent_prompt | llm.with_structured_output(ManagerIntent)
 manager_confirm_chain = manager_confirm_prompt | llm | StrOutputParser()
 
@@ -444,65 +432,6 @@ PACKAGE_VISION_INSTRUCTIONS = (
 
 app = Flask(__name__)
 CORS(app)  # dev local: frontend estático y backend corren en orígenes distintos
-
-
-@app.route("/preguntar", methods=["POST"])
-def preguntar():
-    body = request.get_json(silent=True) or {}
-    query = (body.get("query") or "").strip()
-    if not query:
-        return jsonify(error="La pregunta está vacía."), 400
-
-    try:
-        result = chain.invoke({"query": query})
-    except Exception as exc:  # error de LLM/parsing
-        return jsonify(error=f"No se pudo interpretar la pregunta: {exc}"), 502
-
-    origen_id = NUMBER_TO_ID.get(result.origen_numero)
-    destino_id = NUMBER_TO_ID.get(result.destino_numero)
-
-    if origen_id is None:
-        return jsonify(error=f"No existe el Nodo {result.origen_numero} en el grafo."), 400
-    if destino_id is None:
-        return jsonify(error=f"No existe el Nodo {result.destino_numero} en el grafo."), 400
-    if origen_id == destino_id:
-        return jsonify(error="El origen y el destino no pueden ser el mismo nodo."), 400
-
-    return jsonify(
-        origen_id=origen_id,
-        destino_id=destino_id,
-        origen_nombre=NODES_BY_ID[origen_id]["name"],
-        destino_nombre=NODES_BY_ID[destino_id]["name"],
-    )
-
-
-@app.route("/responder", methods=["POST"])
-def responder():
-    body = request.get_json(silent=True) or {}
-    required = ["query", "origen_nombre", "destino_nombre", "bfs", "dfs"]
-    if not all(k in body for k in required):
-        return jsonify(error="Faltan datos para generar la respuesta."), 400
-
-    try:
-        respuesta = explain_chain.invoke(
-            {
-                "query": body["query"],
-                "origen_nombre": body["origen_nombre"],
-                "destino_nombre": body["destino_nombre"],
-                "bfs_nodos": body["bfs"]["nodes_explored"],
-                "bfs_costo": body["bfs"]["cost"],
-                "bfs_tiempo": body["bfs"]["time_s"],
-                "bfs_pathlen": body["bfs"]["path_length"],
-                "dfs_nodos": body["dfs"]["nodes_explored"],
-                "dfs_costo": body["dfs"]["cost"],
-                "dfs_tiempo": body["dfs"]["time_s"],
-                "dfs_pathlen": body["dfs"]["path_length"],
-            }
-        )
-    except Exception as exc:  # error de LLM o payload mal formado
-        return jsonify(error=f"No se pudo generar la respuesta: {exc}"), 502
-
-    return jsonify(respuesta=respuesta)
 
 
 @app.route("/manager/chat/parse", methods=["POST"])
@@ -809,7 +738,7 @@ def manager_assign_route(driver_id):
         return jsonify(error="Faltan datos de la ruta."), 400
 
     conn = get_db()
-    row = conn.execute("SELECT status FROM drivers WHERE id = ?", (driver_id,)).fetchone()
+    row = conn.execute("SELECT status, name, vehicle_type FROM drivers WHERE id = ?", (driver_id,)).fetchone()
     if row is None:
         conn.close()
         return jsonify(error="Chofer no encontrado."), 404
@@ -840,9 +769,28 @@ def manager_assign_route(driver_id):
         "UPDATE drivers SET status = 'en_ruta', route_json = ?, assigned_at = ? WHERE id = ?",
         (json.dumps(route, ensure_ascii=False), assigned_at, driver_id),
     )
+
+    trip_id = uuid.uuid4().hex
+    conn.execute(
+        "INSERT INTO trips (id, driver_id, driver_name, vehicle_type, stops, node_path, "
+        "distance_m, time_s, assigned_at, completed_at, photo_filename, graph_fingerprint) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+        (
+            trip_id, driver_id, row["name"], row["vehicle_type"],
+            json.dumps(body["stops"], ensure_ascii=False), json.dumps(body["node_path"], ensure_ascii=False),
+            body["distance_m"], body["time_s"], assigned_at, GRAPH_FINGERPRINT,
+        ),
+    )
+    for node_id in body["stops"]:
+        conn.execute(
+            "INSERT INTO node_selection_counts (node_id, count) VALUES (?, 1) "
+            "ON CONFLICT(node_id) DO UPDATE SET count = count + 1",
+            (node_id,),
+        )
+
     conn.commit()
     conn.close()
-    return jsonify({"id": driver_id, "status": "en_ruta", "route": route})
+    return jsonify({"id": driver_id, "status": "en_ruta", "route": route, "trip_id": trip_id})
 
 
 @app.route("/manager/drivers/<driver_id>/complete", methods=["POST"])
@@ -870,6 +818,11 @@ def manager_complete_route(driver_id):
         (last_node_id, idle_since, driver_id),
     )
     was_en_ruta = cur.rowcount > 0
+    if was_en_ruta:
+        conn.execute(
+            "UPDATE trips SET completed_at = ? WHERE driver_id = ? AND completed_at IS NULL",
+            (idle_since, driver_id),
+        )
     conn.commit()
     conn.close()
     return jsonify({"id": driver_id, "status": "idle", "route": None, "was_en_ruta": was_en_ruta})
@@ -1090,6 +1043,80 @@ def manager_upload_driver_photo(driver_id):
 @app.route("/manager/photos/<path:filename>", methods=["GET"])
 def manager_get_photo(filename):
     return send_from_directory(PHOTOS_DIR, filename)
+
+
+def package_photo_url_for(filename) -> str | None:
+    return f"/manager/package-photos/{filename}" if filename else None
+
+
+@app.route("/manager/trips/<trip_id>/photo", methods=["POST"])
+def manager_upload_trip_photo(trip_id):
+    conn = get_db()
+    row = conn.execute("SELECT id FROM trips WHERE id = ?", (trip_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return jsonify(error="Viaje no encontrado."), 404
+
+    file = request.files.get("photo")
+    if file is None or not file.filename:
+        conn.close()
+        return jsonify(error="No se recibió ninguna imagen."), 400
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_PHOTO_EXT:
+        conn.close()
+        return jsonify(error="Formato de imagen no permitido (usa png, jpg, jpeg, gif o webp)."), 400
+
+    filename = f"{trip_id}.{ext}"
+    file.save(PACKAGE_PHOTOS_DIR / filename)
+    conn.execute("UPDATE trips SET photo_filename = ? WHERE id = ?", (filename, trip_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"id": trip_id, "photo_url": package_photo_url_for(filename)})
+
+
+@app.route("/manager/package-photos/<path:filename>", methods=["GET"])
+def manager_get_package_photo(filename):
+    return send_from_directory(PACKAGE_PHOTOS_DIR, filename)
+
+
+@app.route("/manager/trips", methods=["GET"])
+def manager_list_trips():
+    date_from = request.args.get("from")
+    date_to = request.args.get("to")
+    conn = get_db()
+    if date_from and date_to:
+        rows = conn.execute(
+            "SELECT * FROM trips WHERE assigned_at >= ? AND assigned_at < ? ORDER BY assigned_at DESC",
+            (date_from, date_to),
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM trips ORDER BY assigned_at DESC LIMIT 200").fetchall()
+    conn.close()
+    return jsonify([
+        {
+            "id": r["id"],
+            "driver_id": r["driver_id"],
+            "driver_name": r["driver_name"],
+            "vehicle_type": r["vehicle_type"],
+            "stops": json.loads(r["stops"]),
+            "node_path": json.loads(r["node_path"]),
+            "distance_m": r["distance_m"],
+            "time_s": r["time_s"],
+            "assigned_at": r["assigned_at"],
+            "completed_at": r["completed_at"],
+            "photo_url": package_photo_url_for(r["photo_filename"]),
+            "graph_matches": r["graph_fingerprint"] == GRAPH_FINGERPRINT,
+        }
+        for r in rows
+    ])
+
+
+@app.route("/manager/node-selection-counts", methods=["GET"])
+def manager_node_selection_counts():
+    conn = get_db()
+    rows = conn.execute("SELECT node_id, count FROM node_selection_counts").fetchall()
+    conn.close()
+    return jsonify({r["node_id"]: r["count"] for r in rows})
 
 
 if __name__ == "__main__":

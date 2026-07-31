@@ -30,7 +30,7 @@ var VEHICLE_ICONS = { moto: "🏍️", auto: "🚗", noa: "🚐", camion: "🚚"
 var VEHICLE_LABELS = { moto: "Moto", auto: "Auto", noa: "Furgoneta", camion: "Camión" };
 var VEHICLE_RANK = { moto: 0, auto: 1, noa: 2, camion: 3 };
 
-// ---------- geometry helpers (duplicados de app.js, cada página es autocontenida) ----------
+// ---------- geometry helpers (duplicados en otras páginas, cada una es autocontenida) ----------
 
 var nodesById = {};
 GRAPH_DATA.nodes.forEach(function (n) { nodesById[n.id] = n; });

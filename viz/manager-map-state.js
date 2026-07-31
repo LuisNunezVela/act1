@@ -82,7 +82,7 @@ GRAPH_DATA.edges.forEach(function (e) {
   edgeLineByPair[canonicalKey(e.source, e.target)] = line;
 });
 
-// --- etiquetas de distancia/tiempo por calle (igual que en demo.html, + tiempo estimado) ---
+// --- etiquetas de distancia/tiempo por calle ---
 var edgeLabelLayer = L.layerGroup().addTo(map);
 var edgeLabelByPair = {};
 

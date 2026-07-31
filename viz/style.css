@@ -1224,3 +1224,172 @@ code {
 #phone-opacity-icon { font-size: 16px; flex-shrink: 0; }
 
 #driver-detail-stats span { font-size: 14px; font-weight: 700; color: var(--navy); }
+
+/* ==================== history.html — Historial de viajes + Reportes ==================== */
+
+.history-body { background: var(--gray-bg); }
+
+#history-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 20px 90px;
+}
+
+#history-header { margin-bottom: 18px; }
+#history-header h1 { margin: 0 0 2px; font-size: 26px; color: var(--navy); letter-spacing: 0.02em; }
+
+#history-tabs { display: flex; gap: 8px; margin-top: 14px; }
+
+.history-tab {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 9px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: white;
+  color: var(--navy);
+  cursor: pointer;
+}
+
+.history-tab.active { background: var(--navy); color: white; border-color: var(--navy); }
+.history-tab:not(.active):hover { background: var(--gray-bg); }
+
+#trip-date-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+
+#trip-date-input {
+  font-family: inherit;
+  font-size: 14px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: white;
+  color: var(--navy);
+}
+
+#trip-today-btn {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: white;
+  color: var(--navy);
+  cursor: pointer;
+}
+
+#trip-today-btn:hover { background: var(--gray-bg); }
+
+#trip-list { display: flex; flex-direction: column; gap: 12px; }
+
+.trip-card {
+  display: flex;
+  gap: 16px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 4px 14px rgba(20, 25, 50, 0.08);
+}
+
+.trip-card-map {
+  flex-shrink: 0;
+  width: 260px;
+  height: 170px;
+  border-radius: 8px;
+  background: var(--gray-bg);
+  overflow: hidden;
+}
+
+.trip-card-map-unavailable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 10px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.trip-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+
+.trip-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.trip-card-driver { font-size: 15px; font-weight: 700; color: var(--navy); }
+
+.trip-status-badge {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.trip-status-badge.in-progress { background: #fef3c7; color: #92400e; }
+.trip-status-badge.done { background: #dcfce7; color: #166534; }
+
+.trip-card-route { font-size: 13.5px; color: var(--text); }
+.trip-card-stats { font-size: 12.5px; color: var(--text-muted); }
+
+.trip-card-photo {
+  margin-top: 4px;
+  width: 84px;
+  height: 84px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+#photo-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(11, 11, 11, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 24px;
+}
+
+#photo-lightbox-img { max-width: 90vw; max-height: 90vh; border-radius: 10px; }
+
+/* --- mapa esquemático SVG (compartido por las tarjetas de viaje y el mapa de calor) --- */
+
+.graph-svg { display: block; }
+.graph-edge { stroke: var(--border); stroke-width: 1; }
+.graph-highlight-path { fill: none; stroke: var(--path); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.graph-marker { stroke: white; stroke-width: 1.2; }
+.graph-marker-origin { fill: var(--path); }
+.graph-marker-dest { fill: var(--current); }
+
+#heatmap-wrap {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 4px 14px rgba(20, 25, 50, 0.08);
+  display: flex;
+  justify-content: center;
+}
+
+#heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+#heatmap-legend-bar {
+  flex: 1;
+  max-width: 260px;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgb(214, 244, 240), rgb(4, 71, 64));
+  border: 1px solid var(--border);
+}
+
+#history-page #page-nav { margin-top: 24px; max-width: 480px; }

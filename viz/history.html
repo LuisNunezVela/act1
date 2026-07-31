@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EasyRoute — Historial</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body class="history-body">
+
+<div id="history-page">
+  <div id="history-header">
+    <h1>Historial</h1>
+    <p class="subtitle">Viajes realizados y en curso, y qué zonas piden más entregas.</p>
+
+    <div id="history-tabs">
+      <button class="history-tab active" data-tab="viajes">🚚 Viajes</button>
+      <button class="history-tab" data-tab="reportes">🔥 Reportes</button>
+    </div>
+  </div>
+
+  <div id="tab-viajes" class="history-tab-panel">
+    <div id="trip-date-controls">
+      <input type="date" id="trip-date-input" title="Filtrar por día">
+      <button id="trip-today-btn">Hoy</button>
+    </div>
+    <div id="trip-list"></div>
+  </div>
+
+  <div id="tab-reportes" class="history-tab-panel" style="display:none;">
+    <p class="subtitle">Nodos elegidos como parada en las rutas asignadas — más oscuro = más pedidos.</p>
+    <div id="heatmap-wrap"></div>
+    <div id="heatmap-legend">
+      <span>Menos pedidos</span>
+      <div id="heatmap-legend-bar"></div>
+      <span>Más pedidos</span>
+    </div>
+  </div>
+
+  <div id="page-nav">
+    <a href="index.html">🏠 Menú</a>
+    <a href="history.html" class="active">🕒 Historial</a>
+    <a href="editor.html">✏️ Editor</a>
+    <a href="manager.html">🚚 Reparto</a>
+  </div>
+</div>
+
+<div id="photo-lightbox" style="display:none;">
+  <img id="photo-lightbox-img" src="" alt="Foto del encargo">
+</div>
+
+<script src="graph_data.js"></script>
+<script src="history.js"></script>
+</body>
+</html>
