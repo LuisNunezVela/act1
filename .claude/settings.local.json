@@ -59,7 +59,8 @@
       "Artifact",
       "Bash(\"../.venv/Scripts/python.exe\" app.py)",
       "Bash(\"/d/development/ia/act1/.venv/Scripts/python\" app.py)",
-      "Bash(echo \"PID: $!\")"
+      "Bash(echo \"PID: $!\")",
+      "PowerShell(Get-Process *)"
     ]
   }
 }

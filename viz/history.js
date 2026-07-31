@@ -262,7 +262,36 @@
   }
 
   var heatmapWrap = document.getElementById("heatmap-wrap");
+  var heatmapLegendTicks = document.getElementById("heatmap-legend-ticks");
   var heatmapLoaded = false;
+
+  // Marca el tope real (nodo con más pedidos) y unos pasos intermedios sobre la barra de
+  // degradé, para poder leer el rango en números y no solo por intensidad de color.
+  function renderHeatmapLegend(maxCount) {
+    heatmapLegendTicks.innerHTML = "";
+    if (maxCount <= 0) {
+      var empty = document.createElement("span");
+      empty.className = "heatmap-legend-tick";
+      empty.style.left = "0%";
+      empty.textContent = "Sin envíos registrados aún";
+      heatmapLegendTicks.appendChild(empty);
+      return;
+    }
+    var steps = Math.min(4, maxCount);
+    var values = [];
+    for (var i = 0; i <= steps; i++) values.push(Math.round((maxCount * i) / steps));
+    values = values.filter(function (v, i) { return i === 0 || v !== values[i - 1]; });
+
+    values.forEach(function (v) {
+      var pct = (v / maxCount) * 100;
+      var tick = document.createElement("span");
+      tick.className = "heatmap-legend-tick";
+      tick.style.left = pct + "%";
+      tick.style.transform = pct <= 0 ? "translateX(0)" : pct >= 100 ? "translateX(-100%)" : "translateX(-50%)";
+      tick.textContent = v;
+      heatmapLegendTicks.appendChild(tick);
+    });
+  }
 
   function loadHeatmap() {
     if (heatmapLoaded) return;
@@ -287,6 +316,7 @@
         nodeColors: nodeColors, nodeRadii: nodeRadii,
         nodeTitle: function (n) { return n.name + " — " + (counts[n.id] || 0) + " envíos"; },
       }));
+      renderHeatmapLegend(maxCount);
     });
   }
 })();
