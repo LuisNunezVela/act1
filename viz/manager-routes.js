@@ -42,6 +42,14 @@ document.getElementById("btn-assign-route").addEventListener("click", function (
   assignRoute(driverId);
 });
 
+var recipientNameInput = document.getElementById("recipient-name-input");
+var recipientPhoneInput = document.getElementById("recipient-phone-input");
+
+function resetRecipientFields() {
+  recipientNameInput.value = "";
+  recipientPhoneInput.value = "";
+}
+
 function cancelRouteDraft() {
   routeDraftStops = [];
   currentRouteDraft = null;
@@ -50,6 +58,7 @@ function cancelRouteDraft() {
   routeSummary.style.display = "none";
   routeDraftLayer.clearLayers();
   resetPackagePhotoWidget();
+  resetRecipientFields();
   setMode("route-stops");
 }
 
@@ -170,6 +179,7 @@ function finalizeRoute() {
   var warehousePoint = [nodesById[warehouseId].lat, nodesById[warehouseId].lon];
   populateDriverSelect(rankIdleDriversByDistance(idleDrivers, warehousePoint), "No hay choferes disponibles");
   resetPackagePhotoWidget();
+  resetRecipientFields();
 
   routeSummary.style.display = "block";
   routeDraftLayer.clearLayers();
@@ -255,6 +265,8 @@ function assignRoute(driverId) {
     pickup_partial_from: pickupLeg.partial_from || null,
     pickup_partial_to: pickupLeg.partial_to || null,
     pickup_partial_start_dist_m: pickupLeg.partial_start_dist_m || 0,
+    recipient_name: recipientNameInput.value.trim(),
+    recipient_phone: recipientPhoneInput.value.trim(),
   });
   api("POST", "/manager/drivers/" + driverId + "/assign", body).then(function (r) {
     if (!r.ok) { alert(r.data.error || "No se pudo asignar la ruta."); return; }
@@ -275,6 +287,7 @@ function assignRoute(driverId) {
     routeSummary.style.display = "none";
     routeDraftLayer.clearLayers();
     resetPackagePhotoWidget();
+    resetRecipientFields();
     setMode("none");
   }).catch(function () { alert("No se pudo conectar con el backend (¿está corriendo en :5000?)."); });
 }

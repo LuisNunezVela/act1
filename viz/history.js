@@ -204,6 +204,14 @@
     stats.textContent = statsText;
     body.appendChild(stats);
 
+    if (trip.recipient_name || trip.recipient_phone) {
+      var recipient = document.createElement("div");
+      recipient.className = "trip-card-recipient";
+      recipient.textContent = "📇 " + (trip.recipient_name || "Destinatario sin nombre") +
+        (trip.recipient_phone ? " · " + trip.recipient_phone : "");
+      body.appendChild(recipient);
+    }
+
     if (trip.photo_url) {
       var photo = document.createElement("img");
       photo.className = "trip-card-photo";

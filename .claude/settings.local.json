@@ -60,7 +60,11 @@
       "Bash(\"../.venv/Scripts/python.exe\" app.py)",
       "Bash(\"/d/development/ia/act1/.venv/Scripts/python\" app.py)",
       "Bash(echo \"PID: $!\")",
-      "PowerShell(Get-Process *)"
+      "PowerShell(Get-Process *)",
+      "Bash(\"./.venv/Scripts/python.exe\" -m py_compile backend/app.py)",
+      "Bash(node --check driver.js)",
+      "Bash(node --check manager-routes.js)",
+      "Bash(node --check history.js)"
     ]
   }
 }

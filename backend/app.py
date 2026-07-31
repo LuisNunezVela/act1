@@ -124,7 +124,9 @@ def init_db() -> None:
             assigned_at TEXT NOT NULL,
             completed_at TEXT,
             photo_filename TEXT,
-            graph_fingerprint TEXT NOT NULL
+            graph_fingerprint TEXT NOT NULL,
+            recipient_name TEXT,
+            recipient_phone TEXT
         );
         CREATE TABLE IF NOT EXISTS node_selection_counts (
             node_id TEXT PRIMARY KEY,
@@ -147,6 +149,12 @@ def init_db() -> None:
         conn.execute("ALTER TABLE drivers ADD COLUMN vehicle_type TEXT NOT NULL DEFAULT 'auto'")
     if "max_capacity_kg" not in driver_cols:
         conn.execute("ALTER TABLE drivers ADD COLUMN max_capacity_kg REAL")
+
+    trip_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trips)").fetchall()}
+    if "recipient_name" not in trip_cols:
+        conn.execute("ALTER TABLE trips ADD COLUMN recipient_name TEXT")
+    if "recipient_phone" not in trip_cols:
+        conn.execute("ALTER TABLE trips ADD COLUMN recipient_phone TEXT")
 
     # backfill de choferes idle creados antes de este ancla de paseo (last_node_id/idle_since):
     # sin esto se quedarían sin posición y nunca aparecerían paseando por el mapa
@@ -763,6 +771,8 @@ def manager_assign_route(driver_id):
         "pickup_partial_from": body.get("pickup_partial_from"),
         "pickup_partial_to": body.get("pickup_partial_to"),
         "pickup_partial_start_dist_m": body.get("pickup_partial_start_dist_m", 0),
+        "recipient_name": (body.get("recipient_name") or "").strip() or None,
+        "recipient_phone": (body.get("recipient_phone") or "").strip() or None,
         "assigned_at": assigned_at,
     }
     conn.execute(
@@ -773,12 +783,14 @@ def manager_assign_route(driver_id):
     trip_id = uuid.uuid4().hex
     conn.execute(
         "INSERT INTO trips (id, driver_id, driver_name, vehicle_type, stops, node_path, "
-        "distance_m, time_s, assigned_at, completed_at, photo_filename, graph_fingerprint) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+        "distance_m, time_s, assigned_at, completed_at, photo_filename, graph_fingerprint, "
+        "recipient_name, recipient_phone) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)",
         (
             trip_id, driver_id, row["name"], row["vehicle_type"],
             json.dumps(body["stops"], ensure_ascii=False), json.dumps(body["node_path"], ensure_ascii=False),
             body["distance_m"], body["time_s"], assigned_at, GRAPH_FINGERPRINT,
+            route["recipient_name"], route["recipient_phone"],
         ),
     )
     for node_id in body["stops"]:
@@ -1106,6 +1118,8 @@ def manager_list_trips():
             "completed_at": r["completed_at"],
             "photo_url": package_photo_url_for(r["photo_filename"]),
             "graph_matches": r["graph_fingerprint"] == GRAPH_FINGERPRINT,
+            "recipient_name": r["recipient_name"],
+            "recipient_phone": r["recipient_phone"],
         }
         for r in rows
     ])

@@ -349,6 +349,27 @@
   var statusEl = document.getElementById("phone-status");
   var etaEl = document.getElementById("phone-eta");
   var driverSelect = document.getElementById("driver-select");
+  var contactCard = document.getElementById("phone-contact-card");
+  var contactNameEl = document.getElementById("phone-contact-name");
+  var contactPhoneEl = document.getElementById("phone-contact-phone");
+
+  // el destinatario que cargó el gestor al asignar la ruta, como "contacto" para que el
+  // chofer sepa a quién avisar al llegar al destino
+  function updateContactCard(route) {
+    if (!route || (!route.recipient_name && !route.recipient_phone)) {
+      contactCard.style.display = "none";
+      return;
+    }
+    contactCard.style.display = "flex";
+    contactNameEl.textContent = route.recipient_name || "Destinatario";
+    if (route.recipient_phone) {
+      contactPhoneEl.textContent = "📞 " + route.recipient_phone;
+      contactPhoneEl.href = "tel:" + route.recipient_phone;
+      contactPhoneEl.style.display = "inline";
+    } else {
+      contactPhoneEl.style.display = "none";
+    }
+  }
 
   var currentDriverId = null;
   var currentDriver = null;
@@ -383,6 +404,7 @@
     trackedAssignedAt = null;
     statusEl.textContent = statusText || "Sin ruta asignada";
     etaEl.textContent = "";
+    updateContactCard(null);
   }
 
   function finalizeArrival(driver) {
@@ -404,6 +426,7 @@
   function startTracking(driver) {
     clearSimTimers();
     clearRouteVisuals();
+    updateContactCard(driver.route);
 
     var peakOn = driver.route.peak_hour;
     var pickupHops = buildPickupHops(driver.route, peakOn);

@@ -180,11 +180,11 @@ button:disabled {
   margin-bottom: 14px;
 }
 
-select, input[type="range"], input[type="text"] {
+select, input[type="range"], input[type="text"], input[type="tel"] {
   width: 100%;
 }
 
-select, input[type="text"] {
+select, input[type="text"], input[type="tel"] {
   padding: 7px 8px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -192,7 +192,7 @@ select, input[type="text"] {
   background: white;
 }
 
-input[type="text"] {
+input[type="text"], input[type="tel"] {
   margin-bottom: 6px;
   font-family: inherit;
 }
@@ -468,7 +468,7 @@ input[type="text"] {
 }
 
 .manager-body #chat-messages:empty::before {
-  content: "Pregúntame un tiempo de viaje, el clima, o dame una orden, por ejemplo: \201C¿cuánto hay del almacén al nodo 59?\201D, \201C¿va a llover hoy en Santa Cruz?\201D o \201Cenvía a Maria Suarez a nodo 36, 26 y 14\201D";
+  content: "Pregúntame tiempo de viaje entre 2 puntos, el clima, o dame una orden de envio rapido, ";
 }
 
 .dot {
@@ -1122,6 +1122,7 @@ code {
   right: 0;
   z-index: 1000;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
@@ -1153,6 +1154,24 @@ code {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.7);
   white-space: nowrap;
+}
+
+#phone-contact-card {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 13px;
+}
+
+#phone-contact-name { font-weight: 600; }
+
+#phone-contact-phone {
+  color: var(--teal);
+  text-decoration: underline;
 }
 
 #phone-alert-banner {
@@ -1330,6 +1349,7 @@ code {
 
 .trip-card-route { font-size: 13.5px; color: var(--text); }
 .trip-card-stats { font-size: 12.5px; color: var(--text-muted); }
+.trip-card-recipient { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
 
 .trip-card-photo {
   margin-top: 4px;
