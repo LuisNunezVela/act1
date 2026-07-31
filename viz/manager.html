@@ -69,9 +69,8 @@
       <div id="driver-select-hint" style="display:none;"></div>
     </div>
     <div class="field">
-      <label>Destinatario (opcional)</label>
-      <input type="text" id="recipient-name-input" placeholder="Nombre del destinatario">
-      <input type="tel" id="recipient-phone-input" placeholder="Celular del destinatario" style="margin-top:6px;">
+      <label>Destinatarios (opcional)</label>
+      <div id="recipients-fields"></div>
     </div>
     <button id="btn-assign-route" class="btn-primary btn-block">Asignar ruta</button>
   </div>
@@ -180,7 +179,8 @@
   </div>
   <div id="chat-messages"></div>
   <div id="chat-footer">
-    <input type="text" id="ask-input" placeholder="Ej: ¿va a llover hoy? / ¿cuánto del almacén al nodo 59? / Envía a Maria a nodo 36, 26, 14">
+    <input type="text" id="ask-input" placeholder="Ej: Envía en moto al nodo 5 a nombre de Fernando Perez, cel 77765457 · o tocá 🎤">
+    <button id="btn-mic" class="btn-secondary" title="Hablar" aria-label="Grabar voz">🎤</button>
     <button id="btn-ask" class="btn-primary">➤</button>
   </div>
 </div>

@@ -58,10 +58,48 @@ function askManagerBot() {
     var dd = parsed.data;
     var route2 = computeRoute(dd.warehouse_id, dd.paradas_ids, peakToggle.checked);
     if (!route2) { setChatBotMessage(botMsg, "No hay camino posible hacia esas paradas (revisa las calles bloqueadas).", "error"); return null; }
+
+    var driverId, driverLabel;
+    if (dd.chofer_id) {
+      driverId = dd.chofer_id;
+      driverLabel = dd.chofer_nombre;
+    } else {
+      // el backend no conoce la posición en vivo de los choferes (es puramente
+      // client-side) — el frontend elige el libre del tipo de vehículo pedido más
+      // cercano al almacén, igual que ya hace applyPackageAnalysis con la foto de IA
+      var warehousePoint = [nodesById[dd.warehouse_id].lat, nodesById[dd.warehouse_id].lon];
+      var candidates = drivers.filter(function (d) { return d.status === "idle" && d.vehicle_type === dd.vehiculo; });
+      if (candidates.length === 0) {
+        setChatBotMessage(botMsg, "No hay choferes libres en " + (VEHICLE_LABELS[dd.vehiculo] || dd.vehiculo) + " ahora mismo.", "error");
+        return null;
+      }
+      var nearest = rankIdleDriversByDistance(candidates, warehousePoint)[0];
+      driverId = nearest.driver.id;
+      driverLabel = nearest.driver.name;
+    }
+
     currentRouteDraft = route2;
-    assignRoute(dd.chofer_id); // reusa el flujo real: persiste, arranca simulación, log, toast
+
+    // dd.destinatarios viene alineado a dd.paradas_ids (orden en que el usuario los
+    // mencionó); se remapea por node_id sobre route2.stops (orden final, puede haberse
+    // reordenado al optimizar la ruta) para no desalinear nombres con paradas.
+    var recipientByNode = {};
+    dd.paradas_ids.forEach(function (stopId, i) {
+      var d = dd.destinatarios[i] || {};
+      recipientByNode[stopId] = { name: d.nombre || "", phone: d.telefono || "" };
+    });
+    var recipients = route2.stops.map(function (stopId) {
+      var r = recipientByNode[stopId] || { name: "", phone: "" };
+      return { node_id: stopId, name: r.name, phone: r.phone };
+    });
+
+    assignRoute(driverId, recipients); // reusa el flujo real: persiste, arranca simulación, log, toast
+
     var orderNames = route2.stops.map(function (id) { return nodesById[id].name; });
-    var resumen2 = "Envío asignado a " + dd.chofer_nombre + ". Orden: " + orderNames.join(" → ") + ". " + fmtMeters(route2.distance_m) + ", " + fmtDuration(route2.time_s) + ".";
+    var recipientNames = recipients.filter(function (r) { return r.name; }).map(function (r) { return r.name; });
+    var resumen2 = "Envío asignado a " + driverLabel + ". Orden: " + orderNames.join(" → ") + ". " +
+      fmtMeters(route2.distance_m) + ", " + fmtDuration(route2.time_s) + "." +
+      (recipientNames.length ? " Destinatarios: " + recipientNames.join(", ") + "." : "");
     return api("POST", "/manager/chat/confirm", { query: query, resumen: resumen2 });
   }).then(function (confirmResult) {
     if (!confirmResult) return;
@@ -78,4 +116,66 @@ btnAsk.addEventListener("click", askManagerBot);
 askInput.addEventListener("keydown", function (e) {
   if (e.key === "Enter") askManagerBot();
 });
+
+// ---------- dictado por voz (Web Speech API del navegador, sin backend) ----------
+
+var SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+if (!SpeechRecognitionCtor) {
+  btnMic.disabled = true;
+  btnMic.title = "Reconocimiento de voz no disponible en este navegador (usa Chrome o Edge)";
+} else {
+  var recognition = new SpeechRecognitionCtor();
+  recognition.lang = "es-419";
+  // continuous: true evita que corte apenas hay una pausa breve al hablar — sigue
+  // grabando (acumulando cada frase que se va finalizando) hasta que el usuario aprieta
+  // "detener" explícitamente; recién ahí se arma el texto completo y se envía.
+  recognition.continuous = true;
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  var listening = false;
+  var finalTranscriptParts = [];
+
+  function setMicIdle() {
+    listening = false;
+    btnMic.classList.remove("listening");
+    btnMic.textContent = "🎤";
+    btnMic.title = "Hablar";
+  }
+
+  recognition.addEventListener("result", function (e) {
+    for (var i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) finalTranscriptParts.push(e.results[i][0].transcript);
+    }
+  });
+
+  // "end" se dispara siempre al terminar (tanto al detener manualmente como tras un
+  // error), ya con cualquier resultado pendiente ya volcado por "result" — es el único
+  // lugar donde armamos el texto final y disparamos el envío, para no enviar a mitad de
+  // frase ni duplicar el envío entre "result" y "error".
+  recognition.addEventListener("end", function () {
+    setMicIdle();
+    var transcript = finalTranscriptParts.join(" ").trim();
+    finalTranscriptParts = [];
+    if (transcript) {
+      askInput.value = transcript;
+      askManagerBot(); // auto-envío: el pedido se interpreta y (si es un despacho) se asigna solo
+    }
+  });
+  recognition.addEventListener("error", function (e) {
+    if (e.error === "aborted" || e.error === "no-speech") return; // detenido a propósito o silencio, no son errores reales
+    addChatMessage("No pude escucharte (" + e.error + "). ¿Podés repetir?", "chat-msg-bot chat-msg-error");
+  });
+
+  btnMic.addEventListener("click", function () {
+    if (listening) { recognition.stop(); return; }
+    openChat();
+    finalTranscriptParts = [];
+    listening = true;
+    btnMic.classList.add("listening");
+    btnMic.textContent = "⏹";
+    btnMic.title = "Detener grabación";
+    recognition.start();
+  });
+}
 

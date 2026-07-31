@@ -191,6 +191,7 @@ var chatMinimizeBtn = document.getElementById("chat-minimize-btn");
 var chatMessages = document.getElementById("chat-messages");
 var askInput = document.getElementById("ask-input");
 var btnAsk = document.getElementById("btn-ask");
+var btnMic = document.getElementById("btn-mic");
 var eventLogDateInput = document.getElementById("event-log-date-input");
 var eventLogTodayBtn = document.getElementById("event-log-today-btn");
 

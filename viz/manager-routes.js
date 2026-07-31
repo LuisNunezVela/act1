@@ -39,15 +39,50 @@ document.getElementById("btn-assign-route").addEventListener("click", function (
   if (!currentRouteDraft) return;
   var driverId = driverSelect.value;
   if (!driverId) { alert("Elige un chofer."); return; }
-  assignRoute(driverId);
+  assignRoute(driverId, collectRecipients());
 });
 
-var recipientNameInput = document.getElementById("recipient-name-input");
-var recipientPhoneInput = document.getElementById("recipient-phone-input");
+var recipientsFieldsEl = document.getElementById("recipients-fields");
 
-function resetRecipientFields() {
-  recipientNameInput.value = "";
-  recipientPhoneInput.value = "";
+// una fila de destinatario por parada (en el orden final de la ruta, ya optimizado), para
+// que "3 nodos = 3 destinatarios" — cada fila se identifica por su node_id, no por
+// posición, así no se desalinea si luego se vuelve a armar la ruta con otro orden.
+function renderRecipientFields(stopIds) {
+  recipientsFieldsEl.innerHTML = "";
+  stopIds.forEach(function (stopId) {
+    var row = document.createElement("div");
+    row.className = "recipient-row";
+    row.dataset.stopId = stopId;
+
+    var label = document.createElement("div");
+    label.className = "recipient-row-label";
+    label.textContent = "📍 " + nodesById[stopId].name;
+    row.appendChild(label);
+
+    var nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "recipient-name-input";
+    nameInput.placeholder = "Nombre del destinatario";
+    row.appendChild(nameInput);
+
+    var phoneInput = document.createElement("input");
+    phoneInput.type = "tel";
+    phoneInput.className = "recipient-phone-input";
+    phoneInput.placeholder = "Celular del destinatario";
+    row.appendChild(phoneInput);
+
+    recipientsFieldsEl.appendChild(row);
+  });
+}
+
+function collectRecipients() {
+  return Array.prototype.map.call(recipientsFieldsEl.querySelectorAll(".recipient-row"), function (row) {
+    return {
+      node_id: row.dataset.stopId,
+      name: row.querySelector(".recipient-name-input").value.trim(),
+      phone: row.querySelector(".recipient-phone-input").value.trim(),
+    };
+  });
 }
 
 function cancelRouteDraft() {
@@ -58,7 +93,7 @@ function cancelRouteDraft() {
   routeSummary.style.display = "none";
   routeDraftLayer.clearLayers();
   resetPackagePhotoWidget();
-  resetRecipientFields();
+  recipientsFieldsEl.innerHTML = "";
   setMode("route-stops");
 }
 
@@ -179,7 +214,7 @@ function finalizeRoute() {
   var warehousePoint = [nodesById[warehouseId].lat, nodesById[warehouseId].lon];
   populateDriverSelect(rankIdleDriversByDistance(idleDrivers, warehousePoint), "No hay choferes disponibles");
   resetPackagePhotoWidget();
-  resetRecipientFields();
+  renderRecipientFields(currentRouteDraft.stops);
 
   routeSummary.style.display = "block";
   routeDraftLayer.clearLayers();
@@ -249,7 +284,7 @@ function computePickupLeg(driver, peakOn) {
   };
 }
 
-function assignRoute(driverId) {
+function assignRoute(driverId, recipients) {
   var driver = drivers.filter(function (d) { return d.id === driverId; })[0];
   if (!driver) { alert("Chofer no encontrado."); return; }
   var pickupLeg = computePickupLeg(driver, currentRouteDraft.peak_hour);
@@ -265,8 +300,7 @@ function assignRoute(driverId) {
     pickup_partial_from: pickupLeg.partial_from || null,
     pickup_partial_to: pickupLeg.partial_to || null,
     pickup_partial_start_dist_m: pickupLeg.partial_start_dist_m || 0,
-    recipient_name: recipientNameInput.value.trim(),
-    recipient_phone: recipientPhoneInput.value.trim(),
+    recipients: recipients || [],
   });
   api("POST", "/manager/drivers/" + driverId + "/assign", body).then(function (r) {
     if (!r.ok) { alert(r.data.error || "No se pudo asignar la ruta."); return; }
@@ -287,7 +321,7 @@ function assignRoute(driverId) {
     routeSummary.style.display = "none";
     routeDraftLayer.clearLayers();
     resetPackagePhotoWidget();
-    resetRecipientFields();
+    recipientsFieldsEl.innerHTML = "";
     setMode("none");
   }).catch(function () { alert("No se pudo conectar con el backend (¿está corriendo en :5000?)."); });
 }

@@ -204,13 +204,14 @@
     stats.textContent = statsText;
     body.appendChild(stats);
 
-    if (trip.recipient_name || trip.recipient_phone) {
+    (trip.recipients || []).filter(function (r) { return r.name || r.phone; }).forEach(function (r) {
+      var node = nodesById[r.node_id];
       var recipient = document.createElement("div");
       recipient.className = "trip-card-recipient";
-      recipient.textContent = "📇 " + (trip.recipient_name || "Destinatario sin nombre") +
-        (trip.recipient_phone ? " · " + trip.recipient_phone : "");
+      recipient.textContent = "📇 " + (node ? node.name + ": " : "") + (r.name || "Destinatario sin nombre") +
+        (r.phone ? " · " + r.phone : "");
       body.appendChild(recipient);
-    }
+    });
 
     if (trip.photo_url) {
       var photo = document.createElement("img");

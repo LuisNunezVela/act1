@@ -350,25 +350,37 @@
   var etaEl = document.getElementById("phone-eta");
   var driverSelect = document.getElementById("driver-select");
   var contactCard = document.getElementById("phone-contact-card");
-  var contactNameEl = document.getElementById("phone-contact-name");
-  var contactPhoneEl = document.getElementById("phone-contact-phone");
 
-  // el destinatario que cargó el gestor al asignar la ruta, como "contacto" para que el
-  // chofer sepa a quién avisar al llegar al destino
+  // los destinatarios que cargó el gestor al asignar la ruta (uno por parada), como
+  // "contactos" para que el chofer sepa a quién avisar en cada destino
   function updateContactCard(route) {
-    if (!route || (!route.recipient_name && !route.recipient_phone)) {
+    var recipients = ((route && route.recipients) || []).filter(function (r) { return r.name || r.phone; });
+    if (recipients.length === 0) {
       contactCard.style.display = "none";
       return;
     }
     contactCard.style.display = "flex";
-    contactNameEl.textContent = route.recipient_name || "Destinatario";
-    if (route.recipient_phone) {
-      contactPhoneEl.textContent = "📞 " + route.recipient_phone;
-      contactPhoneEl.href = "tel:" + route.recipient_phone;
-      contactPhoneEl.style.display = "inline";
-    } else {
-      contactPhoneEl.style.display = "none";
-    }
+    contactCard.innerHTML = "";
+    recipients.forEach(function (r) {
+      var node = nodesById[r.node_id];
+      var row = document.createElement("div");
+      row.className = "phone-contact-row";
+
+      var label = document.createElement("span");
+      label.className = "phone-contact-name";
+      label.textContent = "📇 " + (node ? node.name + ": " : "") + (r.name || "Destinatario");
+      row.appendChild(label);
+
+      if (r.phone) {
+        var link = document.createElement("a");
+        link.className = "phone-contact-phone";
+        link.href = "tel:" + r.phone;
+        link.textContent = "📞 " + r.phone;
+        row.appendChild(link);
+      }
+
+      contactCard.appendChild(row);
+    });
   }
 
   var currentDriverId = null;

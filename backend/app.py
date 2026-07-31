@@ -155,6 +155,8 @@ def init_db() -> None:
         conn.execute("ALTER TABLE trips ADD COLUMN recipient_name TEXT")
     if "recipient_phone" not in trip_cols:
         conn.execute("ALTER TABLE trips ADD COLUMN recipient_phone TEXT")
+    if "recipients_json" not in trip_cols:
+        conn.execute("ALTER TABLE trips ADD COLUMN recipients_json TEXT")
 
     # backfill de choferes idle creados antes de este ancla de paseo (last_node_id/idle_since):
     # sin esto se quedarían sin posición y nunca aparecerían paseando por el mapa
@@ -337,6 +339,11 @@ def respond_ambiguous_nodes(query: str, mention: str, candidates: list):
     return jsonify(intent="aclaracion", respuesta=respuesta)
 
 
+class Destinatario(BaseModel):
+    nombre: str | None = Field(None, description="Nombre del destinatario de esa parada, si se mencionó.")
+    telefono: str | None = Field(None, description="Teléfono/celular del destinatario de esa parada, si se mencionó.")
+
+
 class ManagerIntent(BaseModel):
     intent: Literal["consulta_tiempo", "despacho", "clima", "otro"] = Field(
         description="'consulta_tiempo' si pregunta cuánto tiempo/distancia toma llegar a un "
@@ -356,12 +363,30 @@ class ManagerIntent(BaseModel):
         "solo para intent='consulta_tiempo'.",
     )
     chofer_nombre: str | None = Field(
-        None, description="Nombre del chofer mencionado, solo para intent='despacho'."
+        None,
+        description="Nombre del chofer mencionado explícitamente, solo para intent='despacho'. "
+        "Si en cambio el usuario pide un TIPO de vehículo (moto/auto/furgoneta/camión) en vez de "
+        "nombrar a un chofer, deja este campo null y usa 'vehiculo'.",
+    )
+    vehiculo: Literal["moto", "auto", "noa", "camion"] | None = Field(
+        None,
+        description="Tipo de vehículo pedido explícitamente para intent='despacho', cuando el "
+        "usuario NO nombra un chofer específico sino que pide un tipo de vehículo (ej. 'en moto', "
+        "'que vaya en camión', 'mándalo en una furgoneta'/'noa'). Se debe asignar al chofer libre "
+        "de ese tipo de vehículo más cercano. Si el usuario nombra un chofer, deja este campo null.",
     )
     paradas_lugares: list[str] = Field(
         default_factory=list,
         description="Paradas a visitar (cada una: número o nombre de lugar/intersección), "
         "solo para intent='despacho'.",
+    )
+    destinatarios: list[Destinatario] = Field(
+        default_factory=list,
+        description="Un destinatario por cada parada de 'paradas_lugares', EN EL MISMO ORDEN "
+        "(el primer destinatario corresponde a la primera parada, etc.). Extrae nombre y/o "
+        "teléfono cuando se mencionen para esa parada. Si el usuario menciona menos "
+        "destinatarios que paradas, deja nombre/teléfono en null para las paradas restantes. "
+        "Solo aplica a intent='despacho'.",
     )
     lugar: str | None = Field(
         None,
@@ -380,7 +405,16 @@ manager_intent_prompt = ChatPromptTemplate.from_messages(
             "cuánto tarda/cuánto falta a un nodo), 'despacho' (piden enviar un chofer a una o "
             "más paradas), 'clima' (preguntan por el clima, temperatura, lluvia o pronóstico de "
             "algún lugar) u 'otro'. Extrae los nodos tal como los menciona el usuario (número o "
-            "nombre de lugar, sin modificarlos) y no inventes datos que no estén en el texto.",
+            "nombre de lugar, sin modificarlos) y no inventes datos que no estén en el texto. "
+            "Para 'despacho': el usuario puede pedir un chofer por NOMBRE ('envía a Maria...') o "
+            "por TIPO DE VEHÍCULO ('realiza un envío en moto...', 'mándalo en camión') — en el "
+            "segundo caso usa el campo 'vehiculo' y deja 'chofer_nombre' en null; se asignará al "
+            "chofer libre de ese vehículo más cercano. También puede indicar un destinatario "
+            "(nombre y/o teléfono) por cada parada — extráelos en 'destinatarios', en el mismo "
+            "orden que 'paradas_lugares'. Ejemplo: 'Realiza un envío en moto al nodo 5 a nombre "
+            "de Fernando Perez, el teléfono es 77765457' da intent=despacho, vehiculo=moto, "
+            "paradas_lugares=['5'], destinatarios=[un destinatario con nombre 'Fernando Perez' "
+            "y teléfono '77765457'].",
         ),
         ("human", "{query}"),
     ]
@@ -489,13 +523,15 @@ def manager_chat_parse():
             )
 
         if result.intent == "despacho":
-            if not result.chofer_nombre:
-                return jsonify(error="No entendí a qué chofer enviar."), 400
-            driver_row = resolve_driver_by_name(conn, result.chofer_nombre)
-            if driver_row is None:
-                return jsonify(error=f"No encontré un chofer llamado '{result.chofer_nombre}'."), 404
-            if driver_row["status"] != "idle":
-                return jsonify(error=f"{driver_row['name']} ya está en una ruta."), 409
+            driver_row = None
+            if result.chofer_nombre:
+                driver_row = resolve_driver_by_name(conn, result.chofer_nombre)
+                if driver_row is None:
+                    return jsonify(error=f"No encontré un chofer llamado '{result.chofer_nombre}'."), 404
+                if driver_row["status"] != "idle":
+                    return jsonify(error=f"{driver_row['name']} ya está en una ruta."), 409
+            elif not result.vehiculo:
+                return jsonify(error="No entendí a qué chofer o tipo de vehículo enviar."), 400
             if not result.paradas_lugares:
                 return jsonify(error="No entendí las paradas de la entrega."), 400
             if warehouse_id is None:
@@ -510,14 +546,30 @@ def manager_chat_parse():
                     return jsonify(error=f"No encontré ningún nodo que coincida con '{mention}'."), 400
                 paradas_ids.append(node["id"])
                 paradas_nombres.append(node["name"])
-            return jsonify(
+
+            # un destinatario por parada, en el mismo orden que paradas_ids (rellena con
+            # null si el usuario mencionó menos destinatarios que paradas). La posición
+            # FINAL de cada parada dentro de la ruta puede cambiar tras optimizar el orden
+            # de visita — el frontend reasocia estos destinatarios a cada parada por su
+            # node_id, no por este índice, para no desalinear nombres si eso ocurre.
+            destinatarios = []
+            for i in range(len(paradas_ids)):
+                d = result.destinatarios[i] if i < len(result.destinatarios) else None
+                destinatarios.append({"nombre": d.nombre if d else None, "telefono": d.telefono if d else None})
+
+            payload = dict(
                 intent="despacho",
-                chofer_id=driver_row["id"],
-                chofer_nombre=driver_row["name"],
                 warehouse_id=warehouse_id,
                 paradas_ids=paradas_ids,
                 paradas_nombres=paradas_nombres,
+                destinatarios=destinatarios,
             )
+            if driver_row is not None:
+                payload["chofer_id"] = driver_row["id"]
+                payload["chofer_nombre"] = driver_row["name"]
+            else:
+                payload["vehiculo"] = result.vehiculo
+            return jsonify(payload)
 
         if result.intent == "clima":
             place = (result.lugar or "Santa Cruz de la Sierra, Bolivia").strip()
@@ -771,8 +823,14 @@ def manager_assign_route(driver_id):
         "pickup_partial_from": body.get("pickup_partial_from"),
         "pickup_partial_to": body.get("pickup_partial_to"),
         "pickup_partial_start_dist_m": body.get("pickup_partial_start_dist_m", 0),
-        "recipient_name": (body.get("recipient_name") or "").strip() or None,
-        "recipient_phone": (body.get("recipient_phone") or "").strip() or None,
+        "recipients": [
+            {
+                "node_id": r.get("node_id"),
+                "name": (r.get("name") or "").strip() or None,
+                "phone": (r.get("phone") or "").strip() or None,
+            }
+            for r in (body.get("recipients") or [])
+        ],
         "assigned_at": assigned_at,
     }
     conn.execute(
@@ -784,13 +842,13 @@ def manager_assign_route(driver_id):
     conn.execute(
         "INSERT INTO trips (id, driver_id, driver_name, vehicle_type, stops, node_path, "
         "distance_m, time_s, assigned_at, completed_at, photo_filename, graph_fingerprint, "
-        "recipient_name, recipient_phone) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)",
+        "recipients_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
         (
             trip_id, driver_id, row["name"], row["vehicle_type"],
             json.dumps(body["stops"], ensure_ascii=False), json.dumps(body["node_path"], ensure_ascii=False),
             body["distance_m"], body["time_s"], assigned_at, GRAPH_FINGERPRINT,
-            route["recipient_name"], route["recipient_phone"],
+            json.dumps(route["recipients"], ensure_ascii=False),
         ),
     )
     for node_id in body["stops"]:
@@ -1118,8 +1176,7 @@ def manager_list_trips():
             "completed_at": r["completed_at"],
             "photo_url": package_photo_url_for(r["photo_filename"]),
             "graph_matches": r["graph_fingerprint"] == GRAPH_FINGERPRINT,
-            "recipient_name": r["recipient_name"],
-            "recipient_phone": r["recipient_phone"],
+            "recipients": json.loads(r["recipients_json"]) if r["recipients_json"] else [],
         }
         for r in rows
     ])
