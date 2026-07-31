@@ -23,27 +23,32 @@
 
   // ---------- proyección lat/lon -> SVG (sin depender de Leaflet: solo un dibujo esquemático) ----------
 
-  var lats = GRAPH_DATA.nodes.map(function (n) { return n.lat; });
-  var lons = GRAPH_DATA.nodes.map(function (n) { return n.lon; });
-  var GRAPH_BOUNDS = {
-    minLat: Math.min.apply(null, lats), maxLat: Math.max.apply(null, lats),
-    minLon: Math.min.apply(null, lons), maxLon: Math.max.apply(null, lons),
-  };
+  // los límites y el proyector se calculan por-llamada (no una sola vez global) porque un
+  // viaje viejo puede traer su propia instantánea histórica del grafo (otros nodos, otra
+  // extensión geográfica) en vez del grafo actual — ver opts.graphNodes en renderGraphSvg.
+  function computeBounds(nodes) {
+    var lats = nodes.map(function (n) { return n.lat; });
+    var lons = nodes.map(function (n) { return n.lon; });
+    return {
+      minLat: Math.min.apply(null, lats), maxLat: Math.max.apply(null, lats),
+      minLon: Math.min.apply(null, lons), maxLon: Math.max.apply(null, lons),
+    };
+  }
+
   // factor de corrección de aspecto: 1° de longitud pesa menos que 1° de latitud en distancia
   // real, salvo en el ecuador — se corrige con el coseno de la latitud media del grafo para
   // que el dibujo no salga estirado horizontalmente
-  var MID_LAT_COS = Math.cos(((GRAPH_BOUNDS.minLat + GRAPH_BOUNDS.maxLat) / 2) * Math.PI / 180);
-
-  function makeProjector(w, h, pad) {
-    var lonRange = (GRAPH_BOUNDS.maxLon - GRAPH_BOUNDS.minLon) || 1;
-    var latRange = (GRAPH_BOUNDS.maxLat - GRAPH_BOUNDS.minLat) || 1;
-    var wUnits = lonRange * MID_LAT_COS, hUnits = latRange;
+  function makeProjector(bounds, w, h, pad) {
+    var midLatCos = Math.cos(((bounds.minLat + bounds.maxLat) / 2) * Math.PI / 180);
+    var lonRange = (bounds.maxLon - bounds.minLon) || 1;
+    var latRange = (bounds.maxLat - bounds.minLat) || 1;
+    var wUnits = lonRange * midLatCos, hUnits = latRange;
     var scale = Math.min((w - 2 * pad) / wUnits, (h - 2 * pad) / hUnits);
     var offsetX = (w - wUnits * scale) / 2;
     var offsetY = (h - hUnits * scale) / 2;
     return function (lat, lon) {
-      var x = offsetX + (lon - GRAPH_BOUNDS.minLon) * MID_LAT_COS * scale;
-      var y = offsetY + (GRAPH_BOUNDS.maxLat - lat) * scale; // lat mayor = arriba
+      var x = offsetX + (lon - bounds.minLon) * midLatCos * scale;
+      var y = offsetY + (bounds.maxLat - lat) * scale; // lat mayor = arriba
       return [x, y];
     };
   }
@@ -58,14 +63,21 @@
   // Dibuja el grafo completo en gris tenue; opcionalmente resalta un camino en verde (con
   // marcador verde en el origen y rojo en el destino, como bugs/report.png) y/o colorea cada
   // nodo según opts.nodeColors (mapa de calor). Todo client-side, sin backend ni Leaflet.
+  // Por defecto dibuja el grafo ACTUAL (GRAPH_DATA); pasando opts.graphNodes/opts.graphEdges
+  // (la instantánea histórica de un viaje viejo, ver loadTrips) dibuja esa versión en cambio.
   function renderGraphSvg(opts) {
     opts = opts || {};
+    var graphNodes = opts.graphNodes || GRAPH_DATA.nodes;
+    var graphEdges = opts.graphEdges || GRAPH_DATA.edges;
+    var byId = opts.graphNodes ? {} : nodesById;
+    if (opts.graphNodes) graphNodes.forEach(function (n) { byId[n.id] = n; });
+
     var w = opts.width || 260, h = opts.height || 180;
-    var project = makeProjector(w, h, opts.pad || 14);
+    var project = makeProjector(computeBounds(graphNodes), w, h, opts.pad || 14);
     var svg = svgEl("svg", { viewBox: "0 0 " + w + " " + h, width: w, height: h, class: "graph-svg" });
 
-    GRAPH_DATA.edges.forEach(function (e) {
-      var a = nodesById[e.source], b = nodesById[e.target];
+    graphEdges.forEach(function (e) {
+      var a = byId[e.source], b = byId[e.target];
       if (!a || !b) return;
       var pa = project(a.lat, a.lon), pb = project(b.lat, b.lon);
       svg.appendChild(svgEl("line", { x1: pa[0], y1: pa[1], x2: pb[0], y2: pb[1], class: "graph-edge" }));
@@ -73,7 +85,7 @@
 
     if (opts.highlightPath && opts.highlightPath.length > 1) {
       var pts = opts.highlightPath.map(function (id) {
-        var n = nodesById[id];
+        var n = byId[id];
         return n ? project(n.lat, n.lon) : null;
       });
       if (pts.every(function (p) { return p; })) {
@@ -84,7 +96,7 @@
       }
     }
 
-    GRAPH_DATA.nodes.forEach(function (n) {
+    graphNodes.forEach(function (n) {
       var p = project(n.lat, n.lon);
       var color = (opts.nodeColors && opts.nodeColors[n.id]) || "#c3c2b7";
       var r = (opts.nodeRadii && opts.nodeRadii[n.id]) || (opts.smallNodes ? 2 : 2.6);
@@ -98,7 +110,7 @@
     });
 
     function marker(nodeId, extraClass) {
-      var n = nodesById[nodeId];
+      var n = byId[nodeId];
       if (!n) return;
       var p = project(n.lat, n.lon);
       svg.appendChild(svgEl("circle", { cx: p[0], cy: p[1], r: 4.5, class: "graph-marker " + extraClass }));
@@ -152,15 +164,25 @@
   var photoLightboxImg = document.getElementById("photo-lightbox-img");
   photoLightbox.addEventListener("click", function () { photoLightbox.style.display = "none"; });
 
-  function tripStopNames(trip) {
-    var names = trip.stops.map(function (id) { return nodesById[id] ? nodesById[id].name : id; });
-    var origin = nodesById[trip.node_path[0]];
+  function tripStopNames(trip, byId) {
+    var names = trip.stops.map(function (id) { return byId[id] ? byId[id].name : id; });
+    var origin = byId[trip.node_path[0]];
     return (origin ? origin.name : trip.node_path[0]) + " → " + names.join(" → ");
   }
 
   function renderTripCard(trip) {
     var card = document.createElement("div");
     card.className = "trip-card";
+
+    // si el grafo actual ya no coincide con el de este viaje, se usa la instantánea
+    // histórica guardada al momento del envío (si existe) tanto para el mini-mapa como
+    // para los nombres de nodo — así se ve el mapa/las paradas tal como estaban entonces,
+    // en vez de "mapa no disponible" o ids crudos sin nombre.
+    var tripNodesById = nodesById;
+    if (!trip.graph_matches && trip.historical_graph) {
+      tripNodesById = {};
+      trip.historical_graph.nodes.forEach(function (n) { tripNodesById[n.id] = n; });
+    }
 
     var mapWrap = document.createElement("div");
     mapWrap.className = "trip-card-map";
@@ -171,6 +193,19 @@
         originNodeId: trip.node_path[0],
         destNodeId: trip.node_path[trip.node_path.length - 1],
       }));
+    } else if (trip.historical_graph) {
+      mapWrap.appendChild(renderGraphSvg({
+        width: 260, height: 170,
+        graphNodes: trip.historical_graph.nodes,
+        graphEdges: trip.historical_graph.edges,
+        highlightPath: trip.node_path,
+        originNodeId: trip.node_path[0],
+        destNodeId: trip.node_path[trip.node_path.length - 1],
+      }));
+      var oldNotice = document.createElement("div");
+      oldNotice.className = "trip-card-map-old-notice";
+      oldNotice.textContent = "Mapa vigente al momento del envío (el grafo cambió después)";
+      mapWrap.appendChild(oldNotice);
     } else {
       mapWrap.className += " trip-card-map-unavailable";
       mapWrap.textContent = "Mapa no disponible: el grafo cambió desde este viaje.";
@@ -194,7 +229,7 @@
 
     var route = document.createElement("div");
     route.className = "trip-card-route";
-    route.textContent = tripStopNames(trip);
+    route.textContent = tripStopNames(trip, tripNodesById);
     body.appendChild(route);
 
     var stats = document.createElement("div");
@@ -205,7 +240,7 @@
     body.appendChild(stats);
 
     (trip.recipients || []).filter(function (r) { return r.name || r.phone; }).forEach(function (r) {
-      var node = nodesById[r.node_id];
+      var node = tripNodesById[r.node_id];
       var recipient = document.createElement("div");
       recipient.className = "trip-card-recipient";
       recipient.textContent = "📇 " + (node ? node.name + ": " : "") + (r.name || "Destinatario sin nombre") +

@@ -70,6 +70,28 @@ def get_db() -> sqlite3.Connection:
     return conn
 
 
+def ensure_graph_snapshot(conn: sqlite3.Connection) -> None:
+    """Guarda una instantánea liviana (solo id/nombre/lat/lon de nodos y pares source/target
+    de aristas — sin la geometría detallada de calles) del grafo ACTUAL, una única vez por
+    cada huella distinta. Se llama al asignar una ruta, así todo viaje queda con el grafo tal
+    como estaba en ese momento disponible para el mini-mapa de Historial, incluso si el grafo
+    se regenera después. No reemplaza graph_export.json ni afecta el grafo en memoria."""
+    exists = conn.execute("SELECT 1 FROM graph_snapshots WHERE fingerprint = ?", (GRAPH_FINGERPRINT,)).fetchone()
+    if exists is not None:
+        return
+    nodes = [{"id": n["id"], "name": n["name"], "lat": n["lat"], "lon": n["lon"]} for n in NODES_BY_ID.values()]
+    edges = [{"source": a, "target": b} for pair in EDGE_PAIRS for a, b in [tuple(pair)]]
+    conn.execute(
+        "INSERT INTO graph_snapshots (fingerprint, nodes_json, edges_json, created_at) VALUES (?, ?, ?, ?)",
+        (
+            GRAPH_FINGERPRINT,
+            json.dumps(nodes, ensure_ascii=False),
+            json.dumps(edges, ensure_ascii=False),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+
 def init_db() -> None:
     conn = get_db()
     conn.executescript(
@@ -135,6 +157,12 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS graph_meta (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             fingerprint TEXT
+        );
+        CREATE TABLE IF NOT EXISTS graph_snapshots (
+            fingerprint TEXT PRIMARY KEY,
+            nodes_json TEXT NOT NULL,
+            edges_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
         );
         """
     )
@@ -838,6 +866,8 @@ def manager_assign_route(driver_id):
         (json.dumps(route, ensure_ascii=False), assigned_at, driver_id),
     )
 
+    ensure_graph_snapshot(conn)
+
     trip_id = uuid.uuid4().hex
     conn.execute(
         "INSERT INTO trips (id, driver_id, driver_name, vehicle_type, stops, node_path, "
@@ -1154,14 +1184,29 @@ def manager_list_trips():
     date_from = request.args.get("from")
     date_to = request.args.get("to")
     conn = get_db()
+    base_query = (
+        "SELECT trips.*, graph_snapshots.nodes_json AS snap_nodes, graph_snapshots.edges_json AS snap_edges "
+        "FROM trips LEFT JOIN graph_snapshots ON graph_snapshots.fingerprint = trips.graph_fingerprint "
+    )
     if date_from and date_to:
         rows = conn.execute(
-            "SELECT * FROM trips WHERE assigned_at >= ? AND assigned_at < ? ORDER BY assigned_at DESC",
+            base_query + "WHERE assigned_at >= ? AND assigned_at < ? ORDER BY assigned_at DESC",
             (date_from, date_to),
         ).fetchall()
     else:
-        rows = conn.execute("SELECT * FROM trips ORDER BY assigned_at DESC LIMIT 200").fetchall()
+        rows = conn.execute(base_query + "ORDER BY assigned_at DESC LIMIT 200").fetchall()
     conn.close()
+
+    def historical_graph_for(r):
+        # el grafo actual no coincide con el que estaba vigente cuando se hizo este viaje —
+        # si se guardó una instantánea de esa versión (ver ensure_graph_snapshot), se manda
+        # para que el mini-mapa de Historial se dibuje tal como estaba en ese momento, en vez
+        # de mostrar "mapa no disponible". Viajes de antes de esta función no tienen
+        # instantánea guardada y siguen mostrando ese aviso.
+        if r["graph_fingerprint"] == GRAPH_FINGERPRINT or not r["snap_nodes"]:
+            return None
+        return {"nodes": json.loads(r["snap_nodes"]), "edges": json.loads(r["snap_edges"])}
+
     return jsonify([
         {
             "id": r["id"],
@@ -1176,6 +1221,7 @@ def manager_list_trips():
             "completed_at": r["completed_at"],
             "photo_url": package_photo_url_for(r["photo_filename"]),
             "graph_matches": r["graph_fingerprint"] == GRAPH_FINGERPRINT,
+            "historical_graph": historical_graph_for(r),
             "recipients": json.loads(r["recipients_json"]) if r["recipients_json"] else [],
         }
         for r in rows
